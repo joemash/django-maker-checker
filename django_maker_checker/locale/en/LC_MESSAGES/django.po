@@ -1,0 +1,582 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-12 10:59+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "System"
+msgstr ""
+
+msgid "Approvals (Maker-Checker)"
+msgstr ""
+
+msgid "Pending"
+msgstr ""
+
+msgid "Changes Requested"
+msgstr ""
+
+msgid "Approved"
+msgstr ""
+
+msgid "Approved & Executed"
+msgstr ""
+
+msgid "Rejected"
+msgstr ""
+
+msgid "Cancelled"
+msgstr ""
+
+msgid "Execution Failed"
+msgstr ""
+
+msgid "Single Approver"
+msgstr ""
+
+msgid "Multiple Approvers"
+msgstr ""
+
+msgid "Approval Flow"
+msgstr ""
+
+msgid "Minutes"
+msgstr ""
+
+msgid "Hours"
+msgstr ""
+
+msgid "Days"
+msgstr ""
+
+msgid "Low"
+msgstr ""
+
+msgid "Medium"
+msgstr ""
+
+msgid "High"
+msgstr ""
+
+msgid "Approve"
+msgstr ""
+
+msgid "Reject"
+msgstr ""
+
+msgid "Request changes"
+msgstr ""
+
+msgid "Submitted"
+msgstr ""
+
+msgid "Notified"
+msgstr ""
+
+msgid "Viewed"
+msgstr ""
+
+msgid "SLA Warning"
+msgstr ""
+
+msgid "Escalated"
+msgstr ""
+
+msgid "Stage Approved"
+msgstr ""
+
+msgid "Resubmitted"
+msgstr ""
+
+msgid "Comment"
+msgstr ""
+
+msgid "Delegated"
+msgstr ""
+
+msgid "Executed"
+msgstr ""
+
+msgid "Retried"
+msgstr ""
+
+msgid "On Track"
+msgstr ""
+
+msgid "At Risk"
+msgstr ""
+
+msgid "No SLA"
+msgstr ""
+
+msgid "Created"
+msgstr ""
+
+msgid "Updated"
+msgstr ""
+
+msgid "Enabled"
+msgstr ""
+
+msgid "Disabled"
+msgstr ""
+
+msgid "Deleted"
+msgstr ""
+
+#, python-format
+msgid ""
+"Submitted for approval as %(reference)s. The change will be applied once a "
+"checker approves it."
+msgstr ""
+
+#, python-format
+msgid "%(action)s: the record no longer exists."
+msgstr ""
+
+#, python-format
+msgid "%(action)s: the record was changed after this request was raised."
+msgstr ""
+
+msgid "Registry key of the action handler"
+msgstr ""
+
+msgid "Empty for tenant-wide rules"
+msgstr ""
+
+msgid ""
+"Multiple approvers only: every approver must approve (otherwise any one)"
+msgstr ""
+
+msgid ""
+"Multiple approvers only: how many of the approvers must approve (N of M)"
+msgstr ""
+
+msgid "Handler-specific conditions"
+msgstr ""
+
+msgid "Approval Policy"
+msgstr ""
+
+msgid "Approval Policies"
+msgstr ""
+
+msgid "Step number for approval flows"
+msgstr ""
+
+msgid "The rule after the change (before it, for deletions)"
+msgstr ""
+
+msgid "[{field, before, after}] in display form"
+msgstr ""
+
+msgid "Rule version the request was raised under"
+msgstr ""
+
+msgid "Human readable subject of the change"
+msgstr ""
+
+msgid "Identifies the locked resource while open"
+msgstr ""
+
+msgid "Proposed change, applied on approval"
+msgstr ""
+
+msgid "State of the target when the request was raised"
+msgstr ""
+
+msgid "Outcome reported by the handler on execution"
+msgstr ""
+
+msgid "Round of approval; goes up on each resubmission"
+msgstr ""
+
+msgid "A reason is required to reject a request."
+msgstr ""
+
+msgid "Say what needs to change."
+msgstr ""
+
+msgid "Added when the stage SLA was breached"
+msgstr ""
+
+msgid "Set when delegated"
+msgstr ""
+
+msgid "The request's round of approval it belongs to"
+msgstr ""
+
+msgid "Empty means all action types"
+msgstr ""
+
+msgid "You cannot delegate to yourself."
+msgstr ""
+
+msgid "The end of the delegation must be after its start."
+msgstr ""
+
+#, python-format
+msgid "%(action)s – %(target)s (%(reference)s)"
+msgstr ""
+
+#, python-format
+msgid "%(action)s (%(reference)s)"
+msgstr ""
+
+#, python-format
+msgid "%(notice)s sent to %(names)s."
+msgstr ""
+
+msgid "Approval required"
+msgstr ""
+
+#, python-format
+msgid "%(maker)s requested approval for %(subject)s."
+msgstr ""
+
+msgid "Approval notification"
+msgstr ""
+
+msgid "Request rejected"
+msgstr ""
+
+#, python-format
+msgid "%(subject)s was rejected. Reason: %(reason)s"
+msgstr ""
+
+msgid "Request approved"
+msgstr ""
+
+#, python-format
+msgid "%(subject)s was approved and applied."
+msgstr ""
+
+msgid "Approved change failed"
+msgstr ""
+
+#, python-format
+msgid "%(subject)s was approved but applying it failed: %(error)s"
+msgstr ""
+
+msgid "Outcome notification"
+msgstr ""
+
+msgid "Changes requested"
+msgstr ""
+
+#, python-format
+msgid "%(subject)s was sent back for changes: %(note)s"
+msgstr ""
+
+msgid "Changes-requested notice"
+msgstr ""
+
+msgid "Approval request cancelled"
+msgstr ""
+
+#, python-format
+msgid "%(subject)s was cancelled and no longer needs action."
+msgstr ""
+
+msgid "Cancellation notice"
+msgstr ""
+
+#, python-format
+msgid "%(subject)s passed its SLA and was escalated to %(target)s."
+msgstr ""
+
+#, python-format
+msgid "%(subject)s passed its SLA."
+msgstr ""
+
+msgid "Approval escalated"
+msgstr ""
+
+msgid "Escalation notice"
+msgstr ""
+
+msgid "Approval due soon"
+msgstr ""
+
+#, python-format
+msgid "%(subject)s is close to its SLA deadline."
+msgstr ""
+
+msgid "SLA reminder"
+msgstr ""
+
+#, python-format
+msgid "%(action)s cannot have per-scope rules."
+msgstr ""
+
+#, python-format
+msgid ""
+"The escalation backup is not a valid approver: approvers must belong to this "
+"tenant and hold the '%(permission)s' permission."
+msgstr ""
+
+#, python-format
+msgid ""
+"An approver is not a valid approver: approvers must belong to this tenant "
+"and hold the '%(permission)s' permission."
+msgstr ""
+
+msgid "Unknown workflow type."
+msgstr ""
+
+msgid "Unknown risk level."
+msgstr ""
+
+msgid "Every step of the approval flow needs an approver."
+msgstr ""
+
+msgid "Select exactly one approver."
+msgstr ""
+
+msgid "Select at least two approvers, or use Single Approver."
+msgstr ""
+
+msgid "A number of required approvals only applies to Multiple Approvers."
+msgstr ""
+
+msgid ""
+"Choose either all approvers or a number of required approvals, not both."
+msgstr ""
+
+#, python-format
+msgid ""
+"Required approvals must be between 1 and the number of approvers (%(count)s)."
+msgstr ""
+
+msgid "Enter a time limit of at least 1."
+msgstr ""
+
+msgid "Choose a time unit."
+msgstr ""
+
+msgid "Choose an escalation backup approver for the SLA rule."
+msgstr ""
+
+#, python-format
+msgid "%(days)sd %(hours)sh"
+msgstr ""
+
+#, python-format
+msgid "%(hours)sh %(minutes)sm"
+msgstr ""
+
+#, python-format
+msgid "%(minutes)sm"
+msgstr ""
+
+#, python-format
+msgid "%(count)s day"
+msgid_plural "%(count)s days"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-format
+msgid "%(count)s hour"
+msgid_plural "%(count)s hours"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-format
+msgid "%(count)s minute"
+msgid_plural "%(count)s minutes"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Overdue"
+msgstr ""
+
+#, python-format
+msgid "overdue by %(duration)s"
+msgstr ""
+
+msgid "Approvals are switched off for this organisation."
+msgstr ""
+
+msgid "No approval policy applies to this action."
+msgstr ""
+
+#, python-format
+msgid "%(problem)s Ask an administrator to update the approval configuration."
+msgstr ""
+
+msgid "No eligible approver other than you is configured."
+msgstr ""
+
+#, python-format
+msgid "No eligible approver other than you is configured for step %(step)s."
+msgstr ""
+
+#, python-format
+msgid ""
+"%(required)s approvals are needed, but only %(eligible)s eligible approver "
+"other than you is configured."
+msgid_plural ""
+"%(required)s approvals are needed, but only %(eligible)s eligible approvers "
+"other than you are configured."
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-format
+msgid ""
+"%(required)s approvals are needed for step %(step)s, but only %(eligible)s "
+"eligible approver other than you is configured."
+msgid_plural ""
+"%(required)s approvals are needed for step %(step)s, but only %(eligible)s "
+"eligible approvers other than you are configured."
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-format
+msgid "%(maker)s submitted %(action)s for %(target)s."
+msgstr ""
+
+#, python-format
+msgid "%(maker)s submitted %(action)s."
+msgstr ""
+
+#, python-format
+msgid ""
+"There is already an open approval request (%(reference)s) for this item."
+msgstr ""
+
+msgid "There is already an open approval request for this item."
+msgstr ""
+
+msgid "This request was sent back to its maker for changes."
+msgstr ""
+
+#, python-format
+msgid "This request is already %(status)s."
+msgstr ""
+
+msgid "You cannot approve or reject a request you raised."
+msgstr ""
+
+msgid "You have already acted on this request."
+msgstr ""
+
+msgid "You are not an approver for the current step of this request."
+msgstr ""
+
+msgid "Unknown decision."
+msgstr ""
+
+#, python-format
+msgid "%(actor)s on behalf of %(delegator)s"
+msgstr ""
+
+#, python-format
+msgid "Rejected by %(who)s. Reason: %(reason)s"
+msgstr ""
+
+#, python-format
+msgid "Changes requested by %(who)s: %(note)s"
+msgstr ""
+
+#, python-format
+msgid "Approved by %(who)s (%(done)s of %(total)s required approvals)."
+msgstr ""
+
+#, python-format
+msgid "Step %(step)s approved by %(who)s; routed to step %(next)s."
+msgstr ""
+
+#, python-format
+msgid "Approved by %(who)s."
+msgstr ""
+
+msgid "Change applied."
+msgstr ""
+
+#, python-format
+msgid "Applying the change failed: %(error)s"
+msgstr ""
+
+msgid "Only approval administrators can retry a failed request."
+msgstr ""
+
+#, python-format
+msgid "%(name)s retried applying the change."
+msgstr ""
+
+msgid "You cannot cancel this request."
+msgstr ""
+
+msgid "Cancelled by the maker."
+msgstr ""
+
+#, python-format
+msgid "Cancelled by %(name)s."
+msgstr ""
+
+#, python-format
+msgid "Reason: %(reason)s"
+msgstr ""
+
+msgid "Only the maker can resubmit a request that was sent back for changes."
+msgstr ""
+
+#, python-format
+msgid "%(name)s resubmitted the request with changes."
+msgstr ""
+
+#, python-format
+msgid "%(name)s resubmitted the request."
+msgstr ""
+
+msgid "A resubmitted request must still change the same item."
+msgstr ""
+
+msgid "Comment cannot be empty."
+msgstr ""
+
+msgid "You cannot comment on this request."
+msgstr ""
+
+#, python-format
+msgid "Opened by %(name)s."
+msgstr ""
+
+msgid "You are not a member of a tenant."
+msgstr ""
+
+msgid "Only approvers can delegate approvals."
+msgstr ""
+
+msgid "The delegate must be an active member of your organisation."
+msgstr ""
+
+msgid "You cannot end this delegation."
+msgstr ""
+
+#, python-format
+msgid "SLA reminder sent — %(percent)s%% of allowed time elapsed."
+msgstr ""
+
+#, python-format
+msgid "SLA breached; escalated to %(target)s."
+msgstr ""
+
+msgid ""
+"SLA breached; no escalation destination is configured, current approvers "
+"reminded."
+msgstr ""

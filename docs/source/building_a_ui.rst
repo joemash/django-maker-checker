@@ -35,7 +35,8 @@ A request's page
 =====================================================  ====================================================================
 Query                                                  Gives
 =====================================================  ====================================================================
-``allowed_actions(user, request)``                     Which buttons to show: decide, cancel, retry
+``allowed_actions(user, request)``                     Which buttons to show: decide, cancel, retry,
+                                                       resubmit
 ``sla_status(request)``                                The current step's SLA: state, percent used, time left, who it
                                                        escalated to
 ``stage_progress(request)``                            Every step: its approvers, approvals done of required, and state
@@ -58,6 +59,8 @@ Call                                                                Does
 ==================================================================  ===========================================
 ``services.decide(request_id, user, Decision.APPROVE, comment)``    Approve; the last approval applies the change
 ``services.decide(request_id, user, Decision.REJECT, reason)``      Reject; a reason is required
+``services.decide(request_id, user, Decision.REQUEST_CHANGES, n)``  Send back to the maker; a note is required
+``services.resubmit(request_id, maker, payload, justification)``    Resubmit after changes (the maker)
 ``services.cancel(request_id, user, reason)``                       Withdraw (the maker, or an administrator)
 ``services.retry(request_id, user)``                                Re-apply a failed request (administrators)
 ``services.add_comment(request_id, user, text)``                    Add a note to the timeline

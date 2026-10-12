@@ -5,9 +5,11 @@ Each sensitive action is described by an ``ActionHandler``: how to build its loc
 its change in the review drawer. Adding a new guarded action means writing one handler.
 """
 
+import json
 from dataclasses import dataclass, field
 from typing import Optional
 
+from django.core.serializers.json import DjangoJSONEncoder
 from django.http import HttpRequest
 
 
@@ -58,6 +60,7 @@ class ActionHandler:
 
     @property
     def approve_permission_label(self) -> str:
+        # Stored as a permission name by hosts (like Django's own "Can add …"), so it stays in English.
         return f"Approve {self.label}"
 
     def supports(self, scope: str) -> bool:
@@ -108,6 +111,19 @@ class ActionHandler:
     def review_context(self, approval_request) -> dict:
         """Data for ``review_template``. The default is a generic Current/Proposed table of snapshot vs payload."""
         return {"rows": diff_rows(approval_request.before_snapshot, approval_request.payload)}
+
+
+def to_payload(values: dict) -> dict:
+    """The JSON form a payload is stored in; raises TypeError naming the offending value.
+
+    Payloads go through this round trip on both paths (approved later, or applied immediately), so the action's
+    function always receives the same JSON values (``Decimal`` and dates as strings) whether or not approval was
+    required. That keeps behaviour identical when a tenant turns a rule on or off.
+    """
+    try:
+        return json.loads(json.dumps(values, cls=DjangoJSONEncoder))
+    except TypeError as err:
+        raise TypeError(f"Maker-checker payloads must be JSON-serialisable: {err}") from err
 
 
 def diff_rows(before: dict, after: dict, labels: Optional[dict] = None):

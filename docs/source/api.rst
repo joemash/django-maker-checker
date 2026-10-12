@@ -5,7 +5,7 @@ Services
 --------
 
 .. automodule:: django_maker_checker.services
-   :members: submit_or_execute, submit, find_policy, requires_approval, decide, execute_approved, retry, cancel, add_comment, record_view, delegate, revoke_delegation, process_sla
+   :members: submit_or_execute, submit, find_policy, requires_approval, decide, resubmit, execute_approved, retry, cancel, add_comment, record_view, delegate, revoke_delegation, process_sla
 
 Rules
 -----
@@ -43,6 +43,9 @@ Adapter
 .. automodule:: django_maker_checker.adapter
    :members: ApprovalsAdapter, Notice, AuditRecord
 
+.. automodule:: django_maker_checker.auth_adapter
+   :members: AuthApprovalsAdapter, sync_permissions
+
 Exceptions
 ----------
 
@@ -63,5 +66,5 @@ Read the models freely, but change state only through :mod:`~django_maker_checke
 :mod:`~django_maker_checker.policies`, which enforce the rules and record the audit trail.
 
 .. automodule:: django_maker_checker.models
-   :members: ApprovalPolicy, ApprovalPolicyApprover, ApprovalPolicyRevision, ApprovalRequest, ApprovalStage, ApprovalStageApprover, ApprovalDecision, ApprovalEvent, ApprovalDelegation
+   :members: Tenant, ApprovalPolicy, ApprovalPolicyApprover, ApprovalPolicyRevision, ApprovalRequest, ApprovalStage, ApprovalStageApprover, ApprovalDecision, ApprovalEvent, ApprovalDelegation
    :exclude-members: DoesNotExist, MultipleObjectsReturned

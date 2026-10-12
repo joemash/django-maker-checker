@@ -9,6 +9,8 @@ from typing import Optional
 
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.translation import gettext as _
+from django.utils.translation import ngettext
 
 from django_maker_checker.conf import cache_timeout, counts_cache, get_adapter
 from django_maker_checker.constants import RequestStatus, SlaState
@@ -17,6 +19,7 @@ from django_maker_checker.permissions import (
     can_cancel,
     can_decide,
     can_manage_policies,
+    can_resubmit,
     can_retry,
     decision_slot,
     has_approve_permission,
@@ -192,6 +195,7 @@ class AllowedActions:
     decide: bool = False
     cancel: bool = False
     retry: bool = False
+    resubmit: bool = False
     is_maker: bool = False
 
 
@@ -200,6 +204,7 @@ def allowed_actions(user, approval_request) -> AllowedActions:
         decide=can_decide(user, approval_request),
         cancel=can_cancel(user, approval_request),
         retry=can_retry(user, approval_request),
+        resubmit=can_resubmit(user, approval_request),
         is_maker=user.pk == approval_request.maker_id,
     )
 
@@ -211,21 +216,21 @@ def _duration(seconds):
     hours, rem = divmod(rem, 3600)
     minutes = rem // 60
     if days:
-        return f"{days}d {hours}h"
+        return _("%(days)sd %(hours)sh") % {"days": days, "hours": hours}
     if hours:
-        return f"{hours}h {minutes:02d}m"
-    return f"{minutes}m"
+        return _("%(hours)sh %(minutes)sm") % {"hours": hours, "minutes": f"{minutes:02d}"}
+    return _("%(minutes)sm") % {"minutes": minutes}
 
 
 def _limit_text(minutes):
     # The SLA limit in the largest whole unit: "2 days", "6 hours" or "90 minutes".
     if minutes % 1440 == 0:
-        n = minutes // 1440
-        return f"{n} day{'s' if n != 1 else ''}"
+        days = minutes // 1440
+        return ngettext("%(count)s day", "%(count)s days", days) % {"count": days}
     if minutes % 60 == 0:
-        n = minutes // 60
-        return f"{n} hour{'s' if n != 1 else ''}"
-    return f"{minutes} minutes"
+        hours = minutes // 60
+        return ngettext("%(count)s hour", "%(count)s hours", hours) % {"count": hours}
+    return ngettext("%(count)s minute", "%(count)s minutes", minutes) % {"count": minutes}
 
 
 @dataclass(frozen=True)
@@ -260,9 +265,9 @@ def sla_status(approval_request, now=None) -> SlaStatus:
     if stage.escalated_at or now >= stage.due_at:
         return SlaStatus(
             SlaState.ESCALATED,
-            "Escalated" if stage.escalated_at else "Overdue",
+            _("Escalated") if stage.escalated_at else _("Overdue"),
             percent=100,
-            remaining=f"overdue by {_duration((now - stage.due_at).total_seconds())}",
+            remaining=_("overdue by %(duration)s") % {"duration": _duration((now - stage.due_at).total_seconds())},
             escalated_to=_escalation_label(stage),
             **timing,
         )
@@ -299,7 +304,7 @@ class StageProgress:
 
 
 def stage_progress(approval_request):
-    """All stages in order. ``required`` is every regular approver when the stage requires all, otherwise one;
+    """All stages in order. ``required`` is how many regular approvers must approve (one, N of M, or all);
     escalation approvals count towards ``done``, capped at ``required``."""
     stages = approval_request.stages.prefetch_related("approvers__approver_user", "approvers__approver_role")
     rows = []
@@ -307,7 +312,7 @@ def stage_progress(approval_request):
         approvers = list(stage.approvers.all())
         regular = [a for a in approvers if not a.is_escalation]
         escalation = [a for a in approvers if a.is_escalation]
-        required = len(regular) if stage.require_all else 1
+        required = stage.required_count(regular)
         done = min(sum(1 for a in approvers if a.satisfied_at), required)
         rows.append(
             StageProgress(

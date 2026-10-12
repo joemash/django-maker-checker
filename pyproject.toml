@@ -121,4 +121,5 @@ confidence = "high"
 
 [tool.coverage.run]
 source = ["django_maker_checker"]
+relative_files = true  # lets the coverage action in CI read the data file
 omit = ["django_maker_checker/migrations/*"]

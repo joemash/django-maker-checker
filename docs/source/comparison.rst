@@ -21,3 +21,13 @@ Rule history             Versioned, with who and why         No                 
 Choose a **workflow engine** when you need rich routing: quorums, org-chart hierarchies, parallel tracks. Choose a
 **moderation** package to review user-generated content before it is published. Choose **django-maker-checker** when
 the requirement is a control: *nobody changes this alone, and we can prove it*.
+
+Known limits
+------------
+
+- **No condition language.** Thresholds such as "only above 10,000" go in a rule's ``conditions`` and are read by the
+  action's ``matches()``.
+- **Routing is by named approvers.** One, any N, all, or ordered steps; there is no org-chart routing (e.g. "the
+  maker's manager's manager").
+- **English only so far.** Every user-facing message is translatable, but the package ships no translations yet;
+  contributions are welcome (see :doc:`development`). Rule-history labels are stored, so they stay in English.

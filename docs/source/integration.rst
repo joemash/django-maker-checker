@@ -1,11 +1,98 @@
 Integrating with your project
 =============================
 
-The engine knows nothing about your users, organisations or permission system. It asks one object, your
-:class:`~django_maker_checker.adapter.ApprovalsAdapter` subclass, named by the ``APPROVALS_ADAPTER`` setting.
+The engine knows nothing about your users, organisations or permission system. It asks one object, an
+:class:`~django_maker_checker.adapter.ApprovalsAdapter`, named by the ``APPROVALS_ADAPTER`` setting. You either use
+the built-in adapter, or write your own.
 
-The adapter
------------
+The built-in adapter
+--------------------
+
+With ``APPROVALS_TENANT_MODEL``, ``APPROVALS_ROLE_MODEL`` and ``APPROVALS_ADAPTER`` unset, the engine uses
+:class:`~django_maker_checker.auth_adapter.AuthApprovalsAdapter`, for single-tenant projects on Django's ``auth``
+app:
+
+- **Tenant:** one built-in tenant, ``Tenant.default()``, which every active user belongs to.
+- **Roles:** Django groups. A rule can name a group, and any of its members may approve.
+- **Permissions:** ordinary Django permissions in the ``approvals`` app, created after every ``migrate``:
+  ``approve_<action_type>`` for each registered action and ``manage_approval_policies`` for administrators. Grant
+  them to users or groups as usual; superusers have them all, but still can't approve their own changes.
+- **Notifications:** emailed with ``django.core.mail`` to recipients with an email address. Set
+  ``DEFAULT_FROM_EMAIL``, and override ``request_url()`` to include a link to your approval screen.
+- **Audit:** each :class:`~django_maker_checker.adapter.AuditRecord` is logged on the ``django_maker_checker.audit``
+  logger, with the record in the log entry's ``audit`` attribute.
+
+Subclass it to change any of these, and point ``APPROVALS_ADAPTER`` at your subclass:
+
+.. code-block:: python
+
+   from django_maker_checker.auth_adapter import AuthApprovalsAdapter
+
+
+   class Approvals(AuthApprovalsAdapter):
+       def request_url(self, approval_request):
+           return f"https://app.example.com/approvals/{approval_request.reference}/"
+
+       def audit(self, record):
+           AuditLog.objects.create(action=record.action, resource=record.resource_type, data=record.after or {})
+
+Your own adapter
+----------------
+
+For multi-tenant projects, or your own roles or permission system, set ``APPROVALS_TENANT_MODEL``,
+``APPROVALS_ROLE_MODEL`` and ``APPROVALS_ADAPTER``, and subclass ``ApprovalsAdapter``. For a project where each user
+has a ``Membership`` in one ``Organisation`` with one ``Role``:
+
+.. code-block:: python
+
+   # approvals_integration/adapter.py
+   from django.contrib.auth import get_user_model
+   from django.db.models import Q
+
+   from django_maker_checker.adapter import ApprovalsAdapter
+   from accounts.models import Membership, Role
+
+
+   class Approvals(ApprovalsAdapter):
+       def _membership(self, user):
+           return Membership.objects.filter(user=user, active=True).select_related("organisation", "role").first()
+
+       def tenant_of(self, user):
+           membership = self._membership(user)
+           return membership.organisation if membership and user.is_active else None
+
+       def members(self, tenant, user_ids=None, role_ids=None):
+           users = get_user_model().objects.filter(
+               membership__organisation=tenant, membership__active=True, is_active=True
+           )
+           if user_ids is not None or role_ids is not None:
+               users = users.filter(Q(pk__in=user_ids or ()) | Q(membership__role_id__in=role_ids or ()))
+           return users.distinct()
+
+       def role_ids_of(self, user):
+           membership = self._membership(user)
+           return {membership.role_id} if membership and membership.role_id else set()
+
+       def roles(self, tenant):
+           return Role.objects.filter(organisation=tenant)
+
+       def role_member_count(self, role):
+           return Membership.objects.filter(role=role, active=True).count()
+
+       def has_permission(self, user, codename):
+           return user.has_perm(f"accounts.{codename}")
+
+       def role_has_permission(self, role, codename):
+           return role.permissions.filter(codename=codename).exists()
+
+       def notify(self, notice):
+           ...  # send notice.text to notice.recipients by email, in-app or chat
+
+       def audit(self, record):
+           ...  # write the AuditRecord to your audit log
+
+Adapter methods
+---------------
 
 Required methods:
 
@@ -40,23 +127,29 @@ Method                                                        Default
 ``role_label(role)``                                          ``str(role)``.
 ============================================================  ==============================================================
 
-The :doc:`quickstart` has a complete adapter for a project with ``Membership`` and ``Role`` models.
-
 Notifications
 -------------
 
 The engine decides *who* hears about an event; your ``notify()`` delivers it over your channels.
 
-=============  ==================================================================================
-Notice kind    Sent to
-=============  ==================================================================================
-requested      The current approvers and their delegates: a request is waiting for them
-decided        The maker: applied, rejected (with the reason, severity ``warning``) or approved but failed
-               to apply (severity ``error``)
-cancelled      The current approvers, and the maker when an administrator cancelled
-sla_warning    The current approvers: the deadline is near
-escalated      The backup approver, or the current approvers when there is none
-=============  ==================================================================================
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Notice kind
+     - Sent to
+   * - ``requested``
+     - The current approvers and their delegates: a request is waiting for them
+   * - ``decided``
+     - The maker: applied, rejected (with the reason, severity ``warning``), or approved but failed to apply (severity ``error``)
+   * - ``changes_requested``
+     - The maker: the request was sent back, with what to change
+   * - ``cancelled``
+     - The current approvers, and the maker when an administrator cancelled
+   * - ``sla_warning``
+     - The current approvers: the deadline is near
+   * - ``escalated``
+     - The backup approver, or the current approvers when there is none
 
 Permissions
 -----------
@@ -68,7 +161,8 @@ The engine only names the permission codenames it checks:
 - ``manage_approval_policies`` (:data:`django_maker_checker.permissions.MANAGE_POLICIES`), for administrators who
   configure rules, cancel anyone's request and retry failed ones.
 
-Your project creates and grants them. A ``post_migrate`` handler that loops over
+The built-in adapter creates them for you. With your own adapter, your project creates and grants them. A
+``post_migrate`` handler that loops over
 :func:`~django_maker_checker.registry.all_handlers` keeps them in step with the registered actions:
 
 .. code-block:: python

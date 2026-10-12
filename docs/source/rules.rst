@@ -33,20 +33,46 @@ validation lives there, so every screen and API enforces the same rules.
 PolicySpec
 ----------
 
-==================  ====================  ==========================================================================
-Field               Default               Meaning
-==================  ====================  ==========================================================================
-``workflow_type``   ``"single"``          ``"single"``, ``"multi"`` or ``"sequential"`` (Approval Flow)
-``approvers``       ``[]``                Tokens: ``u:<user id>`` or ``r:<role id>``; ordered steps for a flow
-``require_all``     ``False``             Multiple Approvers only: every approver must approve
-``is_enabled``      ``True``              A disabled rule holds nothing
-``risk_level``      ``"medium"``          ``"low"``, ``"medium"`` or ``"high"``; copied onto requests for filtering
-``sla_enabled``     ``False``             Give each step a time limit
-``sla_value``       ``None``              The limit, at least 1
-``sla_unit``        ``None``              ``"minutes"``, ``"hours"`` or ``"days"``
-``escalation``      ``""``                Token of the backup approver; required when the SLA is on
-``conditions``      ``None``              Free-form data for handlers' ``matches()``, e.g. ``{"amount_gt": 10000}``
-==================  ====================  ==========================================================================
+.. list-table::
+   :header-rows: 1
+   :widths: 25 15 60
+
+   * - Field
+     - Default
+     - Meaning
+   * - ``workflow_type``
+     - ``"single"``
+     - ``"single"``, ``"multi"`` or ``"sequential"`` (Approval Flow)
+   * - ``approvers``
+     - ``[]``
+     - Tokens: ``u:<user id>`` or ``r:<role id>``; ordered steps for a flow
+   * - ``require_all``
+     - ``False``
+     - Multiple Approvers only: every approver must approve
+   * - ``required_approvals``
+     - ``None``
+     - Multiple Approvers only: how many must approve (N of M)
+   * - ``is_enabled``
+     - ``True``
+     - A disabled rule holds nothing
+   * - ``risk_level``
+     - ``"medium"``
+     - ``"low"``, ``"medium"`` or ``"high"``; copied onto requests for filtering
+   * - ``sla_enabled``
+     - ``False``
+     - Give each step a time limit
+   * - ``sla_value``
+     - ``None``
+     - The limit, at least 1
+   * - ``sla_unit``
+     - ``None``
+     - ``"minutes"``, ``"hours"`` or ``"days"``
+   * - ``escalation``
+     - ``""``
+     - Token of the backup approver; required when the SLA is on
+   * - ``conditions``
+     - ``None``
+     - Free-form data for handlers' ``matches()``, e.g. ``{"amount_gt": 10000}``
 
 Validation
 ----------
@@ -55,6 +81,8 @@ A spec is refused, with every problem reported at once, when:
 
 - the workflow or risk level is unknown;
 - a Single Approver rule doesn't have exactly one approver, or a Multiple Approvers rule has fewer than two;
+- ``required_approvals`` is set on another workflow, is outside 1 to the number of approvers, or is combined with
+  ``require_all``;
 - a step of an Approval Flow has no approver;
 - the SLA is on without a limit of at least 1, a unit, or an escalation backup.
 
@@ -63,6 +91,33 @@ action's ``approve_<action_type>`` permission.
 
 A rule only holds actions when it is enabled and has at least one approver; a rule without approvers is ignored, so
 an unfinished rule can never block an action.
+
+N of M approvers
+----------------
+
+A Multiple Approvers rule can require any N of its approvers:
+
+.. code-block:: python
+
+   policies.PolicySpec(
+       workflow_type=WorkflowType.MULTI,
+       approvers=[f"u:{cfo.pk}", f"u:{treasurer.pk}", f"u:{controller.pk}"],
+       required_approvals=2,                                     # any two of the three
+   )
+
+Each approver is one slot that one person fills, so listing a role more than once asks for that many *different*
+members of it:
+
+.. code-block:: python
+
+   policies.PolicySpec(
+       workflow_type=WorkflowType.MULTI,
+       approvers=[f"r:{finance.pk}", f"r:{finance.pk}"],
+       require_all=True,                                         # two people from Finance
+   )
+
+A request can only be raised when enough people other than the maker could approve each step; otherwise the
+submission is refused with the reason, so a request never waits for approvals that can't happen.
 
 Scoped rules
 ------------

@@ -27,15 +27,19 @@ framework; everything else is the payload and must survive a JSON round trip (``
         ...  # outcome.approval_request.reference
 """
 
-import json
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Optional
 
-from django.core.serializers.json import DjangoJSONEncoder
-
 from django_maker_checker import services
-from django_maker_checker.registry import ActionHandler, ExecutionContext, Scope, diff_rows, register_handler
+from django_maker_checker.registry import (  # to_payload is re-exported here, where it has always been
+    ActionHandler,
+    ExecutionContext,
+    Scope,
+    diff_rows,
+    register_handler,
+    to_payload,
+)
 
 
 @dataclass
@@ -48,19 +52,6 @@ class Outcome:
     @property
     def pending(self):
         return self.approval_request is not None
-
-
-def to_payload(values: dict) -> dict:
-    """The JSON form a payload is stored in; raises TypeError naming the offending value.
-
-    Payloads go through this round trip on both paths (approved later, or applied immediately), so the action's
-    function always receives the same JSON values (``Decimal`` and dates as strings) whether or not approval was
-    required. That keeps behaviour identical when a tenant turns a rule on or off.
-    """
-    try:
-        return json.loads(json.dumps(values, cls=DjangoJSONEncoder))
-    except TypeError as err:
-        raise TypeError(f"Maker-checker payloads must be JSON-serialisable: {err}") from err
 
 
 class FunctionHandler(ActionHandler):

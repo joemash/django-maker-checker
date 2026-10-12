@@ -10,7 +10,8 @@ multi-approver workflows is data (``ApprovalStage`` / ``ApprovalStageApprover``)
 same size whatever the policy shape.
 
 The tenant and role models are configurable (``APPROVALS_TENANT_MODEL`` / ``APPROVALS_ROLE_MODEL``), the same way
-``AUTH_USER_MODEL`` is.
+``AUTH_USER_MODEL`` is. Without them, the built-in ``Tenant`` (one row, for single-tenant projects) and Django's
+``auth.Group`` are used.
 """
 
 from django.conf import settings
@@ -18,6 +19,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 from django_fsm import ConcurrentTransitionMixin, FSMField, transition
 
 from django_maker_checker.conf import get_adapter, reference_prefix
@@ -32,15 +34,36 @@ from django_maker_checker.constants import (
 )
 
 User = settings.AUTH_USER_MODEL
-Tenant = settings.APPROVALS_TENANT_MODEL
-Role = settings.APPROVALS_ROLE_MODEL
+TENANT_MODEL = settings.APPROVALS_TENANT_MODEL
+ROLE_MODEL = settings.APPROVALS_ROLE_MODEL
+
+
+class Tenant(models.Model):
+    """The built-in tenant, for projects that don't have tenants of their own.
+
+    A single-tenant project uses one row, ``Tenant.default()``, which owns every rule and request. It is swappable
+    like ``AUTH_USER_MODEL``: when ``APPROVALS_TENANT_MODEL`` names your own model, this one has no table.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+
+    class Meta:
+        swappable = "APPROVALS_TENANT_MODEL"
+
+    def __str__(self):
+        return self.name
+
+    @classmethod
+    def default(cls):
+        tenant, _created = cls.objects.get_or_create(name="default")
+        return tenant
 
 
 class ApproverTargetMixin(models.Model):
     """An approver slot is either one user or every member of a tenant role."""
 
     approver_user = models.ForeignKey(User, null=True, blank=True, on_delete=models.CASCADE, related_name="+")
-    approver_role = models.ForeignKey(Role, null=True, blank=True, on_delete=models.CASCADE, related_name="+")
+    approver_role = models.ForeignKey(ROLE_MODEL, null=True, blank=True, on_delete=models.CASCADE, related_name="+")
 
     class Meta:
         abstract = True
@@ -74,22 +97,25 @@ class ApprovalPolicy(models.Model):
     Change policies through ``django_maker_checker.policies`` so every change is validated and recorded as a revision.
     """
 
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="approval_policies")
-    action_type = models.CharField(max_length=64, help_text="Registry key of the action handler")
-    scope_key = models.CharField(max_length=128, blank=True, default="", help_text="Empty for tenant-wide rules")
+    tenant = models.ForeignKey(TENANT_MODEL, on_delete=models.CASCADE, related_name="approval_policies")
+    action_type = models.CharField(max_length=64, help_text=_("Registry key of the action handler"))
+    scope_key = models.CharField(max_length=128, blank=True, default="", help_text=_("Empty for tenant-wide rules"))
     is_enabled = models.BooleanField(default=True)
     workflow_type = models.CharField(max_length=16, choices=WorkflowType.CHOICES, default=WorkflowType.SINGLE)
     require_all = models.BooleanField(
-        default=False, help_text="Multiple approvers only: every approver must approve (otherwise any one)"
+        default=False, help_text=_("Multiple approvers only: every approver must approve (otherwise any one)")
+    )
+    required_approvals = models.PositiveSmallIntegerField(
+        null=True, blank=True, help_text=_("Multiple approvers only: how many of the approvers must approve (N of M)")
     )
     risk_level = models.CharField(max_length=10, choices=RiskLevel.CHOICES, default=RiskLevel.MEDIUM)
-    conditions = models.JSONField(default=dict, blank=True, help_text="Handler-specific conditions")
+    conditions = models.JSONField(default=dict, blank=True, help_text=_("Handler-specific conditions"))
 
     sla_enabled = models.BooleanField(default=False)
     sla_value = models.PositiveIntegerField(default=6)
     sla_unit = models.CharField(max_length=10, choices=SlaUnit.CHOICES, default=SlaUnit.HOURS)
     escalation_user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
-    escalation_role = models.ForeignKey(Role, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    escalation_role = models.ForeignKey(ROLE_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
 
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     updated_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
@@ -97,8 +123,8 @@ class ApprovalPolicy(models.Model):
     updated = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = "Approval Policy"
-        verbose_name_plural = "Approval Policies"
+        verbose_name = _("Approval Policy")
+        verbose_name_plural = _("Approval Policies")
         # One rule per action and scope. ``scope_key`` is "" (not NULL) for tenant-wide rules so this constraint
         # also covers them; NULLs would be treated as distinct and allow duplicates.
         constraints = [
@@ -139,6 +165,7 @@ class ApprovalPolicy(models.Model):
             "id": self.id,
             "workflow_type": self.workflow_type,
             "require_all": self.require_all,
+            "required_approvals": self.required_approvals,
             "risk_level": self.risk_level,
             "sla_minutes": self.sla_minutes,
             "escalation": self.escalation_token,
@@ -150,7 +177,7 @@ class ApprovalPolicyApprover(ApproverTargetMixin):
     """One approver slot on a policy. How slots become stages depends on the workflow (``services._stage_layout``)."""
 
     policy = models.ForeignKey(ApprovalPolicy, on_delete=models.CASCADE, related_name="approvers")
-    order = models.PositiveIntegerField(default=0, help_text="Step number for approval flows")
+    order = models.PositiveIntegerField(default=0, help_text=_("Step number for approval flows"))
 
     class Meta:
         ordering = ["order", "id"]
@@ -167,13 +194,13 @@ class ApprovalPolicyRevision(models.Model):
     policy = models.ForeignKey(
         ApprovalPolicy, null=True, blank=True, on_delete=models.SET_NULL, related_name="revisions"
     )
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="approval_policy_revisions")
+    tenant = models.ForeignKey(TENANT_MODEL, on_delete=models.CASCADE, related_name="approval_policy_revisions")
     action_type = models.CharField(max_length=64)
     scope_key = models.CharField(max_length=128, blank=True, default="")
     version = models.PositiveIntegerField()
     change_type = models.CharField(max_length=10, choices=PolicyChange.CHOICES)
-    snapshot = models.JSONField(default=dict, help_text="The rule after the change (before it, for deletions)")
-    changes = models.JSONField(default=list, help_text="[{field, before, after}] in display form")
+    snapshot = models.JSONField(default=dict, help_text=_("The rule after the change (before it, for deletions)"))
+    changes = models.JSONField(default=list, help_text=_("[{field, before, after}] in display form"))
     reason = models.TextField(blank=True)
     actor = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     created = models.DateTimeField(default=timezone.now)
@@ -199,27 +226,28 @@ class ApprovalRequest(ConcurrentTransitionMixin, models.Model):
     if another process changed the status in the meantime, on top of the row locks taken by ``services``.
     """
 
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="approval_requests")
+    tenant = models.ForeignKey(TENANT_MODEL, on_delete=models.CASCADE, related_name="approval_requests")
     reference = models.CharField(max_length=32, unique=True, null=True, blank=True)
     action_type = models.CharField(max_length=64)
     policy = models.ForeignKey(ApprovalPolicy, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     policy_snapshot = models.JSONField(default=dict)
     policy_version = models.PositiveIntegerField(
-        null=True, blank=True, help_text="Rule version the request was raised under"
+        null=True, blank=True, help_text=_("Rule version the request was raised under")
     )
     scope_key = models.CharField(max_length=128, blank=True, default="")
 
-    target_label = models.CharField(max_length=255, blank=True, help_text="Human readable subject of the change")
-    lock_key = models.CharField(max_length=255, help_text="Identifies the locked resource while open")
-    payload = models.JSONField(default=dict, help_text="Proposed change, applied on approval")
-    before_snapshot = models.JSONField(default=dict, help_text="State of the target when the request was raised")
-    result = models.JSONField(default=dict, blank=True, help_text="Outcome reported by the handler on execution")
+    target_label = models.CharField(max_length=255, blank=True, help_text=_("Human readable subject of the change"))
+    lock_key = models.CharField(max_length=255, help_text=_("Identifies the locked resource while open"))
+    payload = models.JSONField(default=dict, help_text=_("Proposed change, applied on approval"))
+    before_snapshot = models.JSONField(default=dict, help_text=_("State of the target when the request was raised"))
+    result = models.JSONField(default=dict, blank=True, help_text=_("Outcome reported by the handler on execution"))
     justification = models.TextField(blank=True)
     risk_level = models.CharField(max_length=10, choices=RiskLevel.CHOICES, default=RiskLevel.MEDIUM)
 
     maker = models.ForeignKey(User, on_delete=models.PROTECT, related_name="approval_requests_made")
     status = FSMField(default=RequestStatus.PENDING, choices=RequestStatus.CHOICES, protected=True, db_index=True)
     current_stage = models.PositiveIntegerField(default=0)
+    submission = models.PositiveIntegerField(default=1, help_text=_("Round of approval; goes up on each resubmission"))
 
     submitted_at = models.DateTimeField(default=timezone.now)
     decided_at = models.DateTimeField(null=True, blank=True)
@@ -262,8 +290,9 @@ class ApprovalRequest(ConcurrentTransitionMixin, models.Model):
     #
     #   PENDING ─approve→ APPROVED ─mark_executed→ EXECUTED
     #      │                 └──────mark_failed→ FAILED ─retry→ APPROVED
+    #      ├─request_changes→ CHANGES_REQUESTED ─resubmit→ PENDING (a new round)
     #      ├─reject→ REJECTED
-    #      └─cancel→ CANCELLED
+    #      └─cancel→ CANCELLED   (also from CHANGES_REQUESTED)
     #
     # APPROVED is short-lived: the decision is final, and applying the change is a separate step so a failure to
     # apply never loses the approval.
@@ -277,12 +306,23 @@ class ApprovalRequest(ConcurrentTransitionMixin, models.Model):
     def reject(self, by, reason):
         """Reject with a mandatory reason; the maker sees it, and it stays on the audit trail."""
         if not (reason or "").strip():
-            raise ValidationError("A reason is required to reject a request.")
+            raise ValidationError(_("A reason is required to reject a request."))
         self.decided_at = timezone.now()
         self.decided_by = by
         self.rejection_reason = reason.strip()
 
-    @transition(field=status, source=RequestStatus.PENDING, target=RequestStatus.CANCELLED)
+    @transition(field=status, source=RequestStatus.PENDING, target=RequestStatus.CHANGES_REQUESTED)
+    def request_changes(self, note):
+        """Send the request back to its maker to amend and resubmit; a note saying what to change is required."""
+        if not (note or "").strip():
+            raise ValidationError(_("Say what needs to change."))
+
+    @transition(field=status, source=RequestStatus.CHANGES_REQUESTED, target=RequestStatus.PENDING)
+    def resubmit(self):
+        """Start a new round of approval; decisions from earlier rounds no longer count."""
+        self.submission += 1
+
+    @transition(field=status, source=list(RequestStatus.CANCELLABLE), target=RequestStatus.CANCELLED)
     def cancel(self, by):
         self.decided_at = timezone.now()
         self.decided_by = by
@@ -316,6 +356,14 @@ class ApprovalRequest(ConcurrentTransitionMixin, models.Model):
         return self.stages.filter(order=self.current_stage).first()
 
 
+def required_approvals_count(slot_count, require_all, required_approvals):
+    """Approvals a stage needs from ``slot_count`` approver slots: N when the rule says N of M, every slot when it
+    requires all, otherwise one."""
+    if required_approvals:
+        return min(required_approvals, slot_count)
+    return slot_count if require_all else 1
+
+
 class ApprovalStage(models.Model):
     """One step of a request's approval, materialised from the policy at submission.
 
@@ -327,6 +375,7 @@ class ApprovalStage(models.Model):
     request = models.ForeignKey(ApprovalRequest, on_delete=models.CASCADE, related_name="stages")
     order = models.PositiveIntegerField()
     require_all = models.BooleanField(default=False)
+    required_approvals = models.PositiveSmallIntegerField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     due_at = models.DateTimeField(null=True, blank=True)
     sla_warned_at = models.DateTimeField(null=True, blank=True)
@@ -340,6 +389,10 @@ class ApprovalStage(models.Model):
     def __str__(self):
         return f"{self.request} stage {self.order + 1}"
 
+    def required_count(self, regular_slots):
+        """How many of the stage's regular (non-escalation) slots must approve."""
+        return required_approvals_count(len(regular_slots), self.require_all, self.required_approvals)
+
 
 class ApprovalStageApprover(ApproverTargetMixin):
     """An approver slot on a stage, copied from the policy (or added by SLA escalation).
@@ -349,7 +402,7 @@ class ApprovalStageApprover(ApproverTargetMixin):
     """
 
     stage = models.ForeignKey(ApprovalStage, on_delete=models.CASCADE, related_name="approvers")
-    is_escalation = models.BooleanField(default=False, help_text="Added when the stage SLA was breached")
+    is_escalation = models.BooleanField(default=False, help_text=_("Added when the stage SLA was breached"))
     satisfied_at = models.DateTimeField(null=True, blank=True)
     satisfied_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
 
@@ -364,9 +417,10 @@ class ApprovalDecision(models.Model):
     stage = models.ForeignKey(ApprovalStage, on_delete=models.CASCADE, related_name="decisions")
     actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
     on_behalf_of = models.ForeignKey(
-        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+", help_text="Set when delegated"
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+", help_text=_("Set when delegated")
     )
     decision = models.CharField(max_length=10, choices=Decision.CHOICES)
+    submission = models.PositiveIntegerField(default=1, help_text=_("The request's round of approval it belongs to"))
     comment = models.TextField(blank=True)
     created = models.DateTimeField(default=timezone.now)
 
@@ -391,12 +445,12 @@ class ApprovalEvent(models.Model):
 class ApprovalDelegation(models.Model):
     """Lets ``delegate`` act on approvals assigned to ``delegator`` during a time window."""
 
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="approval_delegations")
+    tenant = models.ForeignKey(TENANT_MODEL, on_delete=models.CASCADE, related_name="approval_delegations")
     delegator = models.ForeignKey(User, on_delete=models.CASCADE, related_name="approval_delegations_given")
     delegate = models.ForeignKey(User, on_delete=models.CASCADE, related_name="approval_delegations_received")
     starts_at = models.DateTimeField()
     ends_at = models.DateTimeField()
-    action_types = models.JSONField(default=list, blank=True, help_text="Empty means all action types")
+    action_types = models.JSONField(default=list, blank=True, help_text=_("Empty means all action types"))
     reason = models.TextField(blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name="+")
@@ -407,9 +461,9 @@ class ApprovalDelegation(models.Model):
 
     def clean(self):
         if self.delegator_id and self.delegator_id == self.delegate_id:
-            raise ValidationError("You cannot delegate to yourself.")
+            raise ValidationError(_("You cannot delegate to yourself."))
         if self.starts_at and self.ends_at and self.ends_at <= self.starts_at:
-            raise ValidationError("The end of the delegation must be after its start.")
+            raise ValidationError(_("The end of the delegation must be after its start."))
 
     def covers(self, action_type, at=None):
         """Whether the delegation applies to ``action_type`` at ``at`` (now by default): not revoked, inside the

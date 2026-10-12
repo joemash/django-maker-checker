@@ -8,6 +8,7 @@ on the request's timeline.
 import logging
 
 from django.contrib.auth import get_user_model
+from django.utils.translation import gettext as _
 
 from django_maker_checker.adapter import Notice
 from django_maker_checker.conf import get_adapter
@@ -23,6 +24,7 @@ DECIDED = "decided"
 ESCALATED = "escalated"
 CANCELLED = "cancelled"
 SLA_WARNING = "sla_warning"
+CHANGES_REQUESTED = "changes_requested"
 
 
 def current_checkers(approval_request):
@@ -58,8 +60,10 @@ def _current_delegate_ids(approval_request, delegators):
 def subject(approval_request):
     """Short description used in notification texts, e.g. "Add User – Nina Analyst (REQ-2610-00001)"."""
     label = get_handler(approval_request.action_type).label
-    target = f" – {approval_request.target_label}" if approval_request.target_label else ""
-    return f"{label}{target} ({approval_request.reference})"
+    values = {"action": label, "target": approval_request.target_label, "reference": approval_request.reference}
+    if approval_request.target_label:
+        return _("%(action)s – %(target)s (%(reference)s)") % values
+    return _("%(action)s (%(reference)s)") % values
 
 
 def _deliver(approval_request, kind, recipients, title, text, severity="info", record_as=None):
@@ -89,7 +93,9 @@ def _deliver(approval_request, kind, recipients, title, text, severity="info", r
     if record_as:
         names = ", ".join(sorted({getattr(u, "email", "") or u.get_username() for u in recipients}))
         ApprovalEvent.objects.create(
-            request=approval_request, type=EventType.NOTIFIED, message=f"{record_as} sent to {names}."
+            request=approval_request,
+            type=EventType.NOTIFIED,
+            message=_("%(notice)s sent to %(names)s.") % {"notice": record_as, "names": names},
         )
 
 
@@ -102,9 +108,9 @@ def request_submitted(approval_request):
         approval_request,
         REQUESTED,
         current_checkers(approval_request),
-        "Approval required",
-        f"{maker} requested approval for {subject(approval_request)}.",
-        record_as="Approval notification",
+        _("Approval required"),
+        _("%(maker)s requested approval for %(subject)s.") % {"maker": maker, "subject": subject(approval_request)},
+        record_as=_("Approval notification"),
     )
 
 
@@ -112,19 +118,37 @@ def request_decided(approval_request):
     """Tell the maker the outcome: rejected (with the reason), applied, or approved but failed to apply."""
     approval_request.refresh_from_db()
     status = approval_request.status
+    values = {
+        "subject": subject(approval_request),
+        "reason": approval_request.rejection_reason,
+        "error": approval_request.execution_error,
+    }
     if status == RequestStatus.REJECTED:
-        title, severity = "Request rejected", "warning"
-        text = f"{subject(approval_request)} was rejected. Reason: {approval_request.rejection_reason}"
+        title, severity = _("Request rejected"), "warning"
+        text = _("%(subject)s was rejected. Reason: %(reason)s") % values
     elif status == RequestStatus.EXECUTED:
-        title, severity = "Request approved", "info"
-        text = f"{subject(approval_request)} was approved and applied."
+        title, severity = _("Request approved"), "info"
+        text = _("%(subject)s was approved and applied.") % values
     elif status == RequestStatus.FAILED:
-        title, severity = "Approved change failed", "error"
-        text = f"{subject(approval_request)} was approved but applying it failed: {approval_request.execution_error}"
+        title, severity = _("Approved change failed"), "error"
+        text = _("%(subject)s was approved but applying it failed: %(error)s") % values
     else:
         return
     _deliver(
-        approval_request, DECIDED, [approval_request.maker], title, text, severity, record_as="Outcome notification"
+        approval_request, DECIDED, [approval_request.maker], title, text, severity, record_as=_("Outcome notification")
+    )
+
+
+def changes_requested(approval_request, note):
+    """Tell the maker their request was sent back, and what to change."""
+    _deliver(
+        approval_request,
+        CHANGES_REQUESTED,
+        [approval_request.maker],
+        _("Changes requested"),
+        _("%(subject)s was sent back for changes: %(note)s") % {"subject": subject(approval_request), "note": note},
+        severity="warning",
+        record_as=_("Changes-requested notice"),
     )
 
 
@@ -146,23 +170,27 @@ def request_cancelled(approval_request, by_maker=True):
         approval_request,
         CANCELLED,
         users,
-        "Approval request cancelled",
-        f"{subject(approval_request)} was cancelled and no longer needs action.",
-        record_as="Cancellation notice",
+        _("Approval request cancelled"),
+        _("%(subject)s was cancelled and no longer needs action.") % {"subject": subject(approval_request)},
+        record_as=_("Cancellation notice"),
     )
 
 
 def request_escalated(approval_request, target):
     """Tell the current checkers, including the escalation backup just added, that the SLA passed."""
-    text = f"{subject(approval_request)} passed its SLA" + (f" and was escalated to {target}." if target else ".")
+    values = {"subject": subject(approval_request), "target": target}
+    if target:
+        text = _("%(subject)s passed its SLA and was escalated to %(target)s.") % values
+    else:
+        text = _("%(subject)s passed its SLA.") % values
     _deliver(
         approval_request,
         ESCALATED,
         current_checkers(approval_request),
-        "Approval escalated",
+        _("Approval escalated"),
         text,
         "warning",
-        record_as="Escalation notice",
+        record_as=_("Escalation notice"),
     )
 
 
@@ -172,8 +200,8 @@ def sla_warning(approval_request):
         approval_request,
         SLA_WARNING,
         current_checkers(approval_request),
-        "Approval due soon",
-        f"{subject(approval_request)} is close to its SLA deadline.",
+        _("Approval due soon"),
+        _("%(subject)s is close to its SLA deadline.") % {"subject": subject(approval_request)},
         "warning",
-        record_as="SLA reminder",
+        record_as=_("SLA reminder"),
     )

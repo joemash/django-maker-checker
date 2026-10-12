@@ -9,6 +9,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+from django.utils.translation import gettext as _
+
 
 @dataclass(frozen=True)
 class Notice:
@@ -109,7 +111,7 @@ class ApprovalsAdapter(ABC):
 
     def user_label(self, user) -> str:
         """How a user is named in timelines, pickers and history; ``None`` means an automated (system) actor."""
-        return (user.get_full_name() or user.get_username()) if user else "System"
+        return (user.get_full_name() or user.get_username()) if user else _("System")
 
     def role_label(self, role) -> str:
         return str(role)

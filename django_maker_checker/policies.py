@@ -13,6 +13,8 @@ from typing import List, Optional
 
 from django.db import transaction
 from django.db.models import Max
+from django.utils import translation
+from django.utils.translation import gettext as _
 
 from django_maker_checker import audit
 from django_maker_checker.adapter import AuditRecord
@@ -39,6 +41,7 @@ class PolicySpec:
     workflow_type: str = WorkflowType.SINGLE
     approvers: List[str] = field(default_factory=list)  # "u:<id>" / "r:<id>"; ordered steps for approval flows
     require_all: bool = False
+    required_approvals: Optional[int] = None  # Multiple Approvers: how many must approve (N of M)
     is_enabled: bool = True
     risk_level: str = RiskLevel.MEDIUM
     sla_enabled: bool = False
@@ -58,7 +61,7 @@ def add_scoped_policy(tenant, action_type, scope_key, by):
     """Create an (unconfigured) policy for a scope, e.g. when a trigger is added from a trigger bank."""
     handler = get_handler(action_type)
     if not scope_key or not handler.supports(Scope.SCOPED):
-        raise PolicyError([f"{handler.label} cannot have per-scope rules."])
+        raise PolicyError([_("%(action)s cannot have per-scope rules.") % {"action": handler.label}])
     with transaction.atomic():
         policy, created = ApprovalPolicy.objects.get_or_create(
             tenant=tenant, action_type=action_type, scope_key=scope_key, defaults={"created_by": by, "updated_by": by}
@@ -79,14 +82,19 @@ def _resolver(policy):
     by_token.update({f"r:{r.pk}": (None, r) for r in roles})
     label = get_handler(policy.action_type).approve_permission_label
 
-    def resolve(token, what):
+    def resolve(token, escalation=False):
         if token not in by_token:
-            raise PolicyError(
-                [
-                    f"{what} is not a valid approver: approvers must belong to this tenant and hold the '{label}' "
-                    "permission."
-                ]
-            )
+            if escalation:
+                message = _(
+                    "The escalation backup is not a valid approver: approvers must belong to this tenant and hold "
+                    "the '%(permission)s' permission."
+                )
+            else:
+                message = _(
+                    "An approver is not a valid approver: approvers must belong to this tenant and hold the "
+                    "'%(permission)s' permission."
+                )
+            raise PolicyError([message % {"permission": label}])
         return by_token[token]
 
     return resolve
@@ -104,44 +112,70 @@ def validate(policy, spec: PolicySpec):
         raise PolicyError(errors)
 
     resolve = _resolver(policy)
-    approvers = [resolve(token, "An approver") for token in tokens]
-    escalation = resolve(spec.escalation, "The escalation backup") if spec.escalation else (None, None)
+    approvers = [resolve(token) for token in tokens]
+    escalation = resolve(spec.escalation, escalation=True) if spec.escalation else (None, None)
     return approvers, escalation
 
 
 def _approver_tokens(spec):
-    """Approval flows keep every step as given (order matters, blanks are errors); other workflows ignore blanks
-    and duplicates."""
+    """Approval flows keep every step as given (order matters, blanks are errors). Other workflows ignore blanks and
+    repeated users; Multiple Approvers keeps a repeated role, which asks for that many different members of it
+    ("two people from Finance"), since one person can only fill one slot."""
     if spec.workflow_type == WorkflowType.SEQUENTIAL:
         return list(spec.approvers)
-    return list(dict.fromkeys(token for token in spec.approvers if token))
+    tokens = [token for token in spec.approvers if token]
+    if spec.workflow_type != WorkflowType.MULTI:
+        return list(dict.fromkeys(tokens))
+    seen_users = set()
+    kept = []
+    for token in tokens:
+        if token.startswith("u:"):
+            if token in seen_users:
+                continue
+            seen_users.add(token)
+        kept.append(token)
+    return kept
 
 
 def _choice_errors(spec):
     if spec.workflow_type not in dict(WorkflowType.CHOICES):
-        yield "Unknown workflow type."
+        yield _("Unknown workflow type.")
     if spec.risk_level not in dict(RiskLevel.CHOICES):
-        yield "Unknown risk level."
+        yield _("Unknown risk level.")
 
 
 def _approver_errors(spec, tokens):
     if spec.workflow_type == WorkflowType.SEQUENTIAL and (not tokens or not all(tokens)):
-        yield "Every step of the approval flow needs an approver."
+        yield _("Every step of the approval flow needs an approver.")
     if spec.workflow_type == WorkflowType.SINGLE and len(tokens) != 1:
-        yield "Select exactly one approver."
+        yield _("Select exactly one approver.")
     if spec.workflow_type == WorkflowType.MULTI and len(tokens) < 2:
-        yield "Select at least two approvers, or use Single Approver."
+        yield _("Select at least two approvers, or use Single Approver.")
+    yield from _required_approvals_errors(spec, tokens)
+
+
+def _required_approvals_errors(spec, tokens):
+    if spec.required_approvals is None:
+        return
+    if spec.workflow_type != WorkflowType.MULTI:
+        yield _("A number of required approvals only applies to Multiple Approvers.")
+    elif spec.require_all:
+        yield _("Choose either all approvers or a number of required approvals, not both.")
+    elif not 1 <= spec.required_approvals <= len(tokens):
+        yield _("Required approvals must be between 1 and the number of approvers (%(count)s).") % {
+            "count": len(tokens)
+        }
 
 
 def _sla_errors(spec):
     if not spec.sla_enabled:
         return
     if not spec.sla_value or spec.sla_value < 1:
-        yield "Enter a time limit of at least 1."
+        yield _("Enter a time limit of at least 1.")
     if spec.sla_unit not in SlaUnit.TO_MINUTES:
-        yield "Choose a time unit."
+        yield _("Choose a time unit.")
     if not spec.escalation:
-        yield "Choose an escalation backup approver for the SLA rule."
+        yield _("Choose an escalation backup approver for the SLA rule.")
 
 
 @transaction.atomic
@@ -177,7 +211,9 @@ def _apply_spec(policy, spec, escalation):
     a switched-off SLA keeps its last value so turning it back on restores it."""
     policy.is_enabled = spec.is_enabled
     policy.workflow_type = spec.workflow_type
-    policy.require_all = bool(spec.require_all) and spec.workflow_type == WorkflowType.MULTI
+    multi = spec.workflow_type == WorkflowType.MULTI
+    policy.require_all = bool(spec.require_all) and multi
+    policy.required_approvals = spec.required_approvals if multi else None
     policy.risk_level = spec.risk_level
     policy.sla_enabled = spec.sla_enabled
     if spec.sla_enabled:
@@ -204,6 +240,8 @@ def delete_policy(policy, by=None, reason=""):
 
 # --- history ------------------------------------------------------------------------------------
 
+# Revisions store the rule in this display form and compare it across revisions, so its labels and values are kept
+# in English whatever language is active when a rule is saved; a UI may translate them when showing a history.
 ENABLED = "Rule enabled"
 
 
@@ -213,21 +251,30 @@ def describe(policy):
     Names are resolved at the time of the change rather than stored as ids, so a revision still reads correctly
     after an approver leaves or a role is renamed or deleted. The SLA backup only counts while the SLA is on.
     """
+    with translation.override("en"):
+        return _describe(policy)
+
+
+def _describe(policy):
     return {
         ENABLED: "Yes" if policy.is_enabled else "No",
         "Workflow": _workflow_text(policy),
         "Approvers": _approvers_text(policy),
         "SLA": _sla_text(policy),
         "Escalation backup": _escalation_text(policy) if policy.sla_enabled else "—",
-        "Risk level": dict(RiskLevel.CHOICES).get(policy.risk_level, policy.risk_level),
+        "Risk level": str(dict(RiskLevel.CHOICES).get(policy.risk_level, policy.risk_level)),
         "Conditions": _conditions_text(policy),
     }
 
 
 def _workflow_text(policy):
-    text = dict(WorkflowType.CHOICES).get(policy.workflow_type, policy.workflow_type)
+    text = str(dict(WorkflowType.CHOICES).get(policy.workflow_type, policy.workflow_type))
     if policy.workflow_type == WorkflowType.MULTI:
-        text += " (all must approve)" if policy.require_all else " (any one)"
+        count = policy.approvers.count() if policy.pk else 0
+        if policy.required_approvals:
+            text += f" ({policy.required_approvals} of {count} must approve)"
+        else:
+            text += " (all must approve)" if policy.require_all else " (any one)"
     return text
 
 
@@ -241,7 +288,7 @@ def _approvers_text(policy):
 def _sla_text(policy):
     if not policy.sla_enabled:
         return "Off"
-    unit = dict(SlaUnit.CHOICES).get(policy.sla_unit, policy.sla_unit).lower()
+    unit = str(dict(SlaUnit.CHOICES).get(policy.sla_unit, policy.sla_unit)).lower()
     return f"{policy.sla_value} {unit}"
 
 

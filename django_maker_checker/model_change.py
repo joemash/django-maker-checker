@@ -20,6 +20,7 @@ only declares the model and the fields that may change (and, if needed, how to f
 """
 
 from django.core.exceptions import ValidationError
+from django.utils.translation import gettext as _
 
 from django_maker_checker import services
 from django_maker_checker.actions import Outcome, to_payload
@@ -102,11 +103,13 @@ class ModelChangeHandler(ActionHandler):
         payload = approval_request.payload
         obj = self._record(approval_request.tenant, payload["pk"])
         if obj is None:
-            raise ApprovalError(f"{self.label}: the record no longer exists.")
+            raise ApprovalError(_("%(action)s: the record no longer exists.") % {"action": self.label})
         # Only snapshotted requests can detect concurrent edits; direct execution has no snapshot.
         before = getattr(approval_request, "before_snapshot", None)
         if before and self._current(obj, payload["changes"]) != before:
-            raise ApprovalError(f"{self.label}: the record was changed after this request was raised.")
+            raise ApprovalError(
+                _("%(action)s: the record was changed after this request was raised.") % {"action": self.label}
+            )
 
     def execute(self, approval_request, context: ExecutionContext):
         """Re-validate (the direct, no-policy path skips the services' validate step), convert JSON values back to

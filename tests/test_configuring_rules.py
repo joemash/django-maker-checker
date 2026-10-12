@@ -6,7 +6,8 @@ for one host-defined scope (e.g. ``"folder:general"``). Host UIs build a ``Polic
 
 Workflows:
     SINGLE      one approver
-    MULTI       several approvers in one step: any one of them, or all with ``require_all``
+    MULTI       several approvers in one step: any one of them, N of them (``required_approvals``), or all
+                (``require_all``)
     SEQUENTIAL  an approval flow: one step per approver, in order
 
 An SLA gives each step a time limit; overdue steps escalate to a backup approver.
@@ -54,6 +55,17 @@ class SavingARule(EngineTestCase):
         policy = self.save(workflow_type=WorkflowType.MULTI, approvers=[token, "", token, f"u:{self.checker2.pk}"])
         self.assertEqual(policy.approvers.count(), 2)
 
+    def test_a_multi_approver_rule_can_require_n_of_its_approvers(self):
+        approvers = [f"u:{self.checker1.pk}", f"u:{self.checker2.pk}", f"u:{self.admin.pk}"]
+        policy = self.save(workflow_type=WorkflowType.MULTI, approvers=approvers, required_approvals=2)
+        self.assertEqual(policy.required_approvals, 2)
+        self.assertEqual(policies.describe(policy)["Workflow"], "Multiple Approvers (2 of 3 must approve)")
+
+    def test_repeating_a_role_asks_for_that_many_different_members_of_it(self):
+        reviewer = f"r:{self.role_reviewer.pk}"
+        policy = self.save(workflow_type=WorkflowType.MULTI, approvers=[reviewer, reviewer], require_all=True)
+        self.assertEqual([a.approver_role for a in policy.ordered_approvers()], [self.role_reviewer] * 2)
+
     def test_switching_the_sla_off_keeps_its_value_for_when_it_is_switched_back_on(self):
         sla = {"sla_value": 4, "sla_unit": "hours", "escalation": f"u:{self.admin.pk}"}
         self.save(approvers=[f"u:{self.checker1.pk}"], sla_enabled=True, **sla)
@@ -76,6 +88,21 @@ class RuleValidation(EngineTestCase):
             (
                 {"approvers": [f"u:{self.checker1.pk}"], "sla_enabled": True, "sla_value": 2, "sla_unit": "hours"},
                 "escalation backup",
+            ),
+        ]
+        for spec, message in cases:
+            with self.subTest(spec=spec), self.assertRaisesMessage(PolicyError, message):
+                self.save(**spec)
+
+    def test_required_approvals_must_fit_a_multi_approver_rule(self):
+        two = [f"u:{self.checker1.pk}", f"u:{self.checker2.pk}"]
+        cases = [
+            ({"approvers": two[:1], "required_approvals": 1}, "only applies to Multiple Approvers"),
+            ({"workflow_type": WorkflowType.MULTI, "approvers": two, "required_approvals": 3}, "between 1 and"),
+            ({"workflow_type": WorkflowType.MULTI, "approvers": two, "required_approvals": 0}, "between 1 and"),
+            (
+                {"workflow_type": WorkflowType.MULTI, "approvers": two, "required_approvals": 2, "require_all": True},
+                "not both",
             ),
         ]
         for spec, message in cases:
