@@ -22,7 +22,7 @@
 | django\_maker\_checker/notify.py                                      |       82 |        2 |     98% |  136, 183 |
 | django\_maker\_checker/permissions.py                                 |      105 |        6 |     94% |25, 49, 93, 102, 167, 180 |
 | django\_maker\_checker/policies.py                                    |      209 |        8 |     96% |88, 311-313, 321-322, 396-397 |
-| django\_maker\_checker/queries.py                                     |      179 |       15 |     92% |73, 94-95, 115, 130, 142, 170, 177, 228, 231, 237-238, 242, 345, 352 |
+| django\_maker\_checker/queries.py                                     |      179 |       15 |     92% |73, 94-95, 115, 130, 142, 170, 177, 228, 231, 237-238, 242, 347, 354 |
 | django\_maker\_checker/registry.py                                    |       87 |        7 |     92% |75, 99, 110, 131, 137, 182, 192 |
 | django\_maker\_checker/services.py                                    |      484 |       13 |     97% |99-101, 217, 287, 300, 399, 419-420, 520, 692, 785, 788 |
 | django\_maker\_checker/tasks.py                                       |       10 |        1 |     90% |        21 |
