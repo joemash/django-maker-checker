@@ -1,0 +1,333 @@
+"""Creating, validating and changing approval policies.
+
+All policy rules live here so any host UI (or API) gets the same validation: approvers must belong to the tenant
+and hold the action's approve permission, every step of an approval flow needs an approver, and an SLA needs an
+escalation backup. A host form only parses its input into a ``PolicySpec`` and calls ``save_policy``.
+
+Every change is recorded as an ``ApprovalPolicyRevision`` (and sent to the host's audit log) in the same transaction,
+so the history of a rule (who changed what, when and why) can't be skipped by any caller.
+"""
+
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+from django.db import transaction
+from django.db.models import Max
+
+from django_maker_checker import audit
+from django_maker_checker.adapter import AuditRecord
+from django_maker_checker.conf import get_adapter
+from django_maker_checker.constants import PolicyChange, RiskLevel, SlaUnit, WorkflowType
+from django_maker_checker.models import ApprovalPolicy, ApprovalPolicyApprover, ApprovalPolicyRevision
+from django_maker_checker.permissions import approver_choices
+from django_maker_checker.registry import Scope, get_handler
+
+
+class PolicyError(ValueError):
+    """The policy spec is invalid; ``messages`` are safe to show."""
+
+    def __init__(self, messages):
+        self.messages = list(messages)
+        super().__init__(" ".join(self.messages))
+
+
+@dataclass
+class PolicySpec:
+    """What a host UI or API asks a rule to become. Approvers are tokens (``u:<id>`` / ``r:<id>``) so specs can be
+    built straight from form posts; ``save_policy`` resolves and validates them against the tenant."""
+
+    workflow_type: str = WorkflowType.SINGLE
+    approvers: List[str] = field(default_factory=list)  # "u:<id>" / "r:<id>"; ordered steps for approval flows
+    require_all: bool = False
+    is_enabled: bool = True
+    risk_level: str = RiskLevel.MEDIUM
+    sla_enabled: bool = False
+    sla_value: Optional[int] = None
+    sla_unit: Optional[str] = None
+    escalation: str = ""  # "u:<id>" / "r:<id>"
+    conditions: Optional[dict] = None
+
+
+def policy_for(tenant, action_type, scope_key=""):
+    """The saved policy for this tenant/action/scope, or an unsaved one with defaults."""
+    policy = ApprovalPolicy.objects.filter(tenant=tenant, action_type=action_type, scope_key=scope_key).first()
+    return policy or ApprovalPolicy(tenant=tenant, action_type=action_type, scope_key=scope_key, is_enabled=True)
+
+
+def add_scoped_policy(tenant, action_type, scope_key, by):
+    """Create an (unconfigured) policy for a scope, e.g. when a trigger is added from a trigger bank."""
+    handler = get_handler(action_type)
+    if not scope_key or not handler.supports(Scope.SCOPED):
+        raise PolicyError([f"{handler.label} cannot have per-scope rules."])
+    with transaction.atomic():
+        policy, created = ApprovalPolicy.objects.get_or_create(
+            tenant=tenant, action_type=action_type, scope_key=scope_key, defaults={"created_by": by, "updated_by": by}
+        )
+        if created:
+            _record(policy, PolicyChange.CREATED, by, before=None, after=describe(policy))
+    return policy
+
+
+def _resolver(policy):
+    """Build a token → (user, role) lookup over the users and roles eligible to approve this action.
+
+    Resolving only against the eligible set means one check covers several rules at once: approvers must exist,
+    belong to the policy's tenant, be active and hold the approve permission.
+    """
+    users, roles = approver_choices(policy.tenant, policy.action_type)
+    by_token = {f"u:{u.pk}": (u, None) for u in users}
+    by_token.update({f"r:{r.pk}": (None, r) for r in roles})
+    label = get_handler(policy.action_type).approve_permission_label
+
+    def resolve(token, what):
+        if token not in by_token:
+            raise PolicyError(
+                [
+                    f"{what} is not a valid approver: approvers must belong to this tenant and hold the '{label}' "
+                    "permission."
+                ]
+            )
+        return by_token[token]
+
+    return resolve
+
+
+def validate(policy, spec: PolicySpec):
+    """Return ``(approvers, escalation)`` resolved to ``(user, role)`` pairs, or raise PolicyError.
+
+    Shape errors (unknown choices, wrong approver count, incomplete SLA) are collected and reported together; only
+    then are tokens resolved against the tenant, which fails on the first ineligible approver.
+    """
+    tokens = _approver_tokens(spec)
+    errors = [*_choice_errors(spec), *_approver_errors(spec, tokens), *_sla_errors(spec)]
+    if errors:
+        raise PolicyError(errors)
+
+    resolve = _resolver(policy)
+    approvers = [resolve(token, "An approver") for token in tokens]
+    escalation = resolve(spec.escalation, "The escalation backup") if spec.escalation else (None, None)
+    return approvers, escalation
+
+
+def _approver_tokens(spec):
+    """Approval flows keep every step as given (order matters, blanks are errors); other workflows ignore blanks
+    and duplicates."""
+    if spec.workflow_type == WorkflowType.SEQUENTIAL:
+        return list(spec.approvers)
+    return list(dict.fromkeys(token for token in spec.approvers if token))
+
+
+def _choice_errors(spec):
+    if spec.workflow_type not in dict(WorkflowType.CHOICES):
+        yield "Unknown workflow type."
+    if spec.risk_level not in dict(RiskLevel.CHOICES):
+        yield "Unknown risk level."
+
+
+def _approver_errors(spec, tokens):
+    if spec.workflow_type == WorkflowType.SEQUENTIAL and (not tokens or not all(tokens)):
+        yield "Every step of the approval flow needs an approver."
+    if spec.workflow_type == WorkflowType.SINGLE and len(tokens) != 1:
+        yield "Select exactly one approver."
+    if spec.workflow_type == WorkflowType.MULTI and len(tokens) < 2:
+        yield "Select at least two approvers, or use Single Approver."
+
+
+def _sla_errors(spec):
+    if not spec.sla_enabled:
+        return
+    if not spec.sla_value or spec.sla_value < 1:
+        yield "Enter a time limit of at least 1."
+    if spec.sla_unit not in SlaUnit.TO_MINUTES:
+        yield "Choose a time unit."
+    if not spec.escalation:
+        yield "Choose an escalation backup approver for the SLA rule."
+
+
+@transaction.atomic
+def save_policy(policy, spec: PolicySpec, by, reason=""):
+    """Validate ``spec`` and apply it to ``policy`` (saved or new), recording a revision when anything changed.
+
+    In-flight requests keep their snapshot.
+    """
+    approvers, escalation = validate(policy, spec)
+    creating = policy.pk is None
+    if not creating:
+        # Serialise concurrent edits of one rule so each gets its own revision number.
+        ApprovalPolicy.objects.select_for_update().filter(pk=policy.pk).first()
+    before = None if creating else describe(policy)
+
+    _apply_spec(policy, spec, escalation)
+    policy.updated_by = by
+    if creating:
+        policy.created_by = by
+    policy.save()
+    _replace_approvers(policy, approvers)
+
+    after = describe(policy)
+    if creating:
+        _record(policy, PolicyChange.CREATED, by, before=None, after=after, reason=reason)
+    elif after != before:
+        _record(policy, _change_type(before, after), by, before=before, after=after, reason=reason)
+    return policy
+
+
+def _apply_spec(policy, spec, escalation):
+    """Copy the validated spec onto the policy. ``require_all`` only means something for multi-approver rules, and
+    a switched-off SLA keeps its last value so turning it back on restores it."""
+    policy.is_enabled = spec.is_enabled
+    policy.workflow_type = spec.workflow_type
+    policy.require_all = bool(spec.require_all) and spec.workflow_type == WorkflowType.MULTI
+    policy.risk_level = spec.risk_level
+    policy.sla_enabled = spec.sla_enabled
+    if spec.sla_enabled:
+        policy.sla_value, policy.sla_unit = spec.sla_value, spec.sla_unit
+    if spec.conditions is not None:
+        policy.conditions = spec.conditions
+    policy.escalation_user, policy.escalation_role = escalation
+
+
+def _replace_approvers(policy, approvers):
+    policy.approvers.all().delete()
+    ApprovalPolicyApprover.objects.bulk_create(
+        ApprovalPolicyApprover(policy=policy, order=order, approver_user=user, approver_role=role)
+        for order, (user, role) in enumerate(approvers)
+    )
+
+
+@transaction.atomic
+def delete_policy(policy, by=None, reason=""):
+    """Remove a policy, recording its last state. Requests already raised under it keep their snapshot."""
+    _record(policy, PolicyChange.DELETED, by, before=describe(policy), after=None, reason=reason)
+    policy.delete()
+
+
+# --- history ------------------------------------------------------------------------------------
+
+ENABLED = "Rule enabled"
+
+
+def describe(policy):
+    """The rule in display form, ``{field label: text}``, as stored on revisions and shown in histories.
+
+    Names are resolved at the time of the change rather than stored as ids, so a revision still reads correctly
+    after an approver leaves or a role is renamed or deleted. The SLA backup only counts while the SLA is on.
+    """
+    return {
+        ENABLED: "Yes" if policy.is_enabled else "No",
+        "Workflow": _workflow_text(policy),
+        "Approvers": _approvers_text(policy),
+        "SLA": _sla_text(policy),
+        "Escalation backup": _escalation_text(policy) if policy.sla_enabled else "—",
+        "Risk level": dict(RiskLevel.CHOICES).get(policy.risk_level, policy.risk_level),
+        "Conditions": _conditions_text(policy),
+    }
+
+
+def _workflow_text(policy):
+    text = dict(WorkflowType.CHOICES).get(policy.workflow_type, policy.workflow_type)
+    if policy.workflow_type == WorkflowType.MULTI:
+        text += " (all must approve)" if policy.require_all else " (any one)"
+    return text
+
+
+def _approvers_text(policy):
+    """Approval-flow steps joined with arrows (the order matters); other workflows as a plain list."""
+    labels = [a.approver_label for a in policy.ordered_approvers()] if policy.pk else []
+    separator = " → " if policy.workflow_type == WorkflowType.SEQUENTIAL else ", "
+    return separator.join(labels) or "—"
+
+
+def _sla_text(policy):
+    if not policy.sla_enabled:
+        return "Off"
+    unit = dict(SlaUnit.CHOICES).get(policy.sla_unit, policy.sla_unit).lower()
+    return f"{policy.sla_value} {unit}"
+
+
+def _escalation_text(policy):
+    adapter = get_adapter()
+    if policy.escalation_user_id:
+        return adapter.user_label(policy.escalation_user)
+    if policy.escalation_role_id:
+        return adapter.role_label(policy.escalation_role)
+    return "—"
+
+
+def _conditions_text(policy):
+    conditions = sorted((policy.conditions or {}).items())
+    return ", ".join(f"{name}={value}" for name, value in conditions) or "—"
+
+
+def _diff(before, after):
+    """Changed fields between two ``describe()`` results, as display rows; missing side shows as "—"."""
+    before, after = before or {}, after or {}
+    return [
+        {"field": key, "before": before.get(key, "—"), "after": after.get(key, "—")}
+        for key in dict.fromkeys([*before, *after])
+        if before.get(key) != after.get(key)
+    ]
+
+
+def _change_type(before, after):
+    """Classify an edit: toggling only the enabled switch is ENABLED/DISABLED (the changes auditors look for most);
+    anything else, including a toggle combined with other edits, is UPDATED."""
+    changed = {row["field"] for row in _diff(before, after)}
+    if changed == {ENABLED}:
+        return PolicyChange.ENABLED if after[ENABLED] == "Yes" else PolicyChange.DISABLED
+    return PolicyChange.UPDATED
+
+
+# Revision change types mapped to the host audit log's action vocabulary; enable/disable/update are all "updated".
+_AUDIT_ACTIONS = {PolicyChange.CREATED: "created", PolicyChange.DELETED: "deleted"}
+
+
+def _record(policy, change_type, actor, before, after, reason=""):
+    """Write the next revision of the rule and send it to the host audit log.
+
+    Versions are numbered per tenant, action and scope (not per policy row), so numbering continues if a deleted
+    rule is created again. Called inside the caller's transaction; ``save_policy`` locks the policy row first so
+    concurrent edits get distinct versions (the unique constraint is the backstop).
+    """
+    key = {"tenant": policy.tenant, "action_type": policy.action_type, "scope_key": policy.scope_key}
+    revision = ApprovalPolicyRevision.objects.create(
+        policy=policy,
+        version=current_version(**key) + 1,
+        change_type=change_type,
+        snapshot=after if after is not None else before,
+        changes=_diff(before, after),
+        reason=(reason or "").strip(),
+        actor=actor,
+        **key,
+    )
+    audit.send(
+        AuditRecord(
+            action=_AUDIT_ACTIONS.get(change_type, "updated"),
+            resource_type="ApprovalPolicy",
+            resource_id=str(policy.pk),
+            tenant_id=policy.tenant_id,
+            actor_id=getattr(actor, "pk", None),
+            before=before,
+            after=after,
+            metadata={
+                "action_type": policy.action_type,
+                "scope_key": policy.scope_key,
+                "version": revision.version,
+                "change_type": change_type,
+                "reason": revision.reason,
+            },
+        )
+    )
+    return revision
+
+
+def current_version(tenant, action_type, scope_key=""):
+    """Latest revision number of a rule (0 if it has never been saved)."""
+    revisions = ApprovalPolicyRevision.objects.filter(tenant=tenant, action_type=action_type, scope_key=scope_key)
+    return revisions.aggregate(v=Max("version"))["v"] or 0
+
+
+def policy_summary(policy):
+    """``(is_active, is_configured)`` for list pages."""
+    configured = bool(policy.pk) and policy.is_configured()
+    return policy.is_enabled and configured, configured

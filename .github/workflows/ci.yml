@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: ${{ matrix.toxenv }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toxenv: [linting, quality, security]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip tox
+      - run: tox -e ${{ matrix.toxenv }}
+
+  tests:
+    name: ${{ matrix.toxenv }} / ${{ matrix.database }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { python: "3.11", toxenv: py311-dj52, database: postgres }
+          - { python: "3.12", toxenv: py312-dj52, database: postgres }
+          - { python: "3.12", toxenv: py312-dj60, database: postgres }
+          - { python: "3.12", toxenv: py312-dj61, database: postgres }
+          - { python: "3.13", toxenv: py313-dj52, database: postgres }
+          - { python: "3.13", toxenv: py313-dj60, database: postgres }
+          - { python: "3.13", toxenv: py313-dj61, database: postgres }
+          - { python: "3.14", toxenv: py314-dj52, database: postgres }
+          - { python: "3.14", toxenv: py314-dj60, database: postgres }
+          - { python: "3.14", toxenv: py314-dj61, database: postgres }
+          - { python: "3.13", toxenv: py313-dj61, database: sqlite }
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: maker_checker
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@localhost:5432/maker_checker' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --upgrade pip tox
+      - run: tox -e ${{ matrix.toxenv }}
+
+  docs:
+    name: Build the documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r docs/requirements.txt -e .
+      - run: sphinx-build -W --keep-going -b html docs/source docs/build/html
+
+  package:
+    name: Build and check the distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip build twine
+      - run: python -m build
+      - run: twine check --strict dist/*
