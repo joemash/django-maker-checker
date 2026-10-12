@@ -22,7 +22,7 @@ from django_maker_checker.conf import get_adapter
 from django_maker_checker.constants import PolicyChange, RiskLevel, SlaUnit, WorkflowType
 from django_maker_checker.models import ApprovalPolicy, ApprovalPolicyApprover, ApprovalPolicyRevision
 from django_maker_checker.permissions import approver_choices
-from django_maker_checker.registry import Scope, get_handler
+from django_maker_checker.registry import ActionHandler, Scope, get_handler
 
 
 class PolicyError(ValueError):
@@ -107,7 +107,12 @@ def validate(policy, spec: PolicySpec):
     then are tokens resolved against the tenant, which fails on the first ineligible approver.
     """
     tokens = _approver_tokens(spec)
-    errors = [*_choice_errors(spec), *_approver_errors(spec, tokens), *_sla_errors(spec)]
+    errors = [
+        *_choice_errors(spec),
+        *_approver_errors(spec, tokens),
+        *_sla_errors(spec),
+        *_condition_errors(policy, spec),
+    ]
     if errors:
         raise PolicyError(errors)
 
@@ -115,6 +120,13 @@ def validate(policy, spec: PolicySpec):
     approvers = [resolve(token) for token in tokens]
     escalation = resolve(spec.escalation, escalation=True) if spec.escalation else (None, None)
     return approvers, escalation
+
+
+def _condition_errors(policy, spec):
+    """The action's own checks on the rule's ``conditions`` (``ActionHandler.validate_conditions``)."""
+    if spec.conditions is None:
+        return []
+    return list(get_handler(policy.action_type).validate_conditions(spec.conditions))
 
 
 def _approver_tokens(spec):
@@ -263,7 +275,7 @@ def _describe(policy):
         "SLA": _sla_text(policy),
         "Escalation backup": _escalation_text(policy) if policy.sla_enabled else "—",
         "Risk level": str(dict(RiskLevel.CHOICES).get(policy.risk_level, policy.risk_level)),
-        "Conditions": _conditions_text(policy),
+        **_conditions_rows(policy),
     }
 
 
@@ -301,9 +313,14 @@ def _escalation_text(policy):
     return "—"
 
 
-def _conditions_text(policy):
-    conditions = sorted((policy.conditions or {}).items())
-    return ", ".join(f"{name}={value}" for name, value in conditions) or "—"
+def _conditions_rows(policy):
+    """The action's own description of the rule's conditions (``ActionHandler.describe_conditions``). A rule whose
+    action is no longer registered falls back to the plain form, so its history can still be written."""
+    try:
+        handler = get_handler(policy.action_type)
+    except LookupError:
+        handler = ActionHandler()
+    return {str(label): str(text) for label, text in handler.describe_conditions(policy.conditions or {}).items()}
 
 
 def _diff(before, after):

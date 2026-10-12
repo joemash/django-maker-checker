@@ -119,6 +119,35 @@ members of it:
 A request can only be raised when enough people other than the maker could approve each step; otherwise the
 submission is refused with the reason, so a request never waits for approvals that can't happen.
 
+Action-specific settings
+------------------------
+
+A rule's ``conditions`` hold settings only its action understands, such as amount thresholds per currency or the
+accounts a rule covers. The action defines three hooks for them:
+
+- ``matches(policy, payload)`` decides whether the rule holds a given change;
+- ``validate_conditions(conditions)`` returns problems with the settings, which ``save_policy`` reports with the
+  rule's other errors, so every screen and API enforces them;
+- ``describe_conditions(conditions)`` returns the settings as ``{label: text}`` for rule history, so a change reads
+  "Threshold: KES 10,000.00 → KES 25,000.00" rather than raw data.
+
+.. code-block:: python
+
+   def threshold_errors(conditions):
+       amounts = [t.get("amount") for t in conditions.get("thresholds", [])]
+       return [] if all(a and Decimal(a) > 0 for a in amounts) else ["Threshold amounts must be positive."]
+
+
+   @approval_action(
+       "payout",
+       ...,
+       matches=lambda policy, p: Decimal(p["amount"]) > threshold_for(policy.conditions, p["currency"]),
+       validate_conditions=threshold_errors,
+       describe_conditions=lambda c: {"Thresholds": ", ".join(f"{t['currency']} {t['amount']}" for t in c.get("thresholds", [])) or "None"},
+   )
+
+Rule history stores these descriptions, so keep their labels stable.
+
 Scoped rules
 ------------
 

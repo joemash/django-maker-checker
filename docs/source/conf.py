@@ -34,6 +34,8 @@ extensions = [
 
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 autosectionlabel_prefix_document = True
+# Label page titles and top-level sections only: the changelog repeats headings such as "Added" per version.
+autosectionlabel_maxdepth = 2
 autodoc_member_order = "bysource"
 autodoc_default_options = {"show-inheritance": True}
 autodoc_typehints = "description"

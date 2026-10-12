@@ -17,7 +17,7 @@ Queries
 -------
 
 .. automodule:: django_maker_checker.queries
-   :members: RequestFilter, awaiting, made_by, checker_history, makers, open_count, pending_count, allowed_actions, AllowedActions, sla_status, SlaStatus, stage_progress, StageProgress, current_approvers_label, approvable_action_types, policy_history, policy_version_status, PolicyVersionStatus
+   :members: RequestFilter, awaiting, made_by, checker_history, makers, open_count, open_requests_for, pending_count, allowed_actions, AllowedActions, sla_status, SlaStatus, stage_progress, StageProgress, current_approvers_label, approvable_action_types, policy_history, policy_version_status, PolicyVersionStatus
 
 Permissions
 -----------
@@ -66,5 +66,5 @@ Read the models freely, but change state only through :mod:`~django_maker_checke
 :mod:`~django_maker_checker.policies`, which enforce the rules and record the audit trail.
 
 .. automodule:: django_maker_checker.models
-   :members: Tenant, ApprovalPolicy, ApprovalPolicyApprover, ApprovalPolicyRevision, ApprovalRequest, ApprovalStage, ApprovalStageApprover, ApprovalDecision, ApprovalEvent, ApprovalDelegation
+   :members: Tenant, ApprovalPolicy, ApprovalPolicyApprover, ApprovalPolicyRevision, ApprovalRequest, ApprovalStage, ApprovalStageApprover, ApprovalDecision, ApprovalEvent, ApprovalDelegation, ApprovalLock
    :exclude-members: DoesNotExist, MultipleObjectsReturned

@@ -14,7 +14,7 @@ from django.utils.translation import ngettext
 
 from django_maker_checker.conf import cache_timeout, counts_cache, get_adapter
 from django_maker_checker.constants import RequestStatus, SlaState
-from django_maker_checker.models import ApprovalPolicyRevision, ApprovalRequest
+from django_maker_checker.models import ApprovalLock, ApprovalPolicyRevision, ApprovalRequest
 from django_maker_checker.permissions import (
     can_cancel,
     can_decide,
@@ -154,6 +154,15 @@ def makers(rows):
     """Distinct makers of ``rows``, for a maker filter."""
     adapter = get_adapter()
     return sorted({r.maker for r in rows}, key=lambda u: adapter.user_label(u).lower())
+
+
+def open_requests_for(tenant, keys):
+    """Open requests holding any of the item ``keys`` (``ActionHandler.lock_keys``), as ``{key: request}``.
+
+    For marking items that are waiting for approval, e.g. a "Pending approval" badge on each affected row.
+    """
+    locks = ApprovalLock.objects.filter(tenant=tenant, key__in=list(keys)).select_related("request")
+    return {lock.key: lock.request for lock in locks}
 
 
 def open_count(user):

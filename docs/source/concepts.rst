@@ -73,7 +73,8 @@ Life cycle
 - **Rules are snapshotted.** Each request copies its rule when it is raised, so editing or deleting a rule never
   changes requests already in flight.
 - **One open request per item**, enforced by a partial unique index on ``(tenant, action_type, lock_key)``. A second
-  submission for the same item is refused with the reference of the open one.
+  submission for the same item is refused with the reference of the open one. Actions that touch several items lock
+  all of them, across action types (``lock_keys``).
 - **Execution is separate from the decision.** If applying the change fails, the approval stands and the request
   becomes ``FAILED`` with the error. An administrator can retry it.
 - **Every write locks the row** (``select_for_update``), so two checkers approving at once can't apply a change twice.

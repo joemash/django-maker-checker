@@ -79,6 +79,9 @@ class FunctionHandler(ActionHandler):
         scope_keys=None,
         matches=None,
         validate=None,
+        lock_keys=None,
+        validate_conditions=None,
+        describe_conditions=None,
     ):
         self.func = func
         self.action_type = action_type
@@ -95,6 +98,9 @@ class FunctionHandler(ActionHandler):
         self._scope_keys = scope_keys
         self._matches = matches
         self._validate = validate
+        self._lock_keys = lock_keys
+        self._validate_conditions = validate_conditions
+        self._describe_conditions = describe_conditions
 
     @property
     def origin(self):
@@ -115,6 +121,17 @@ class FunctionHandler(ActionHandler):
 
     def matches(self, policy, payload):
         return self._matches(policy, payload) if self._matches else True
+
+    def lock_keys(self, payload):
+        return [str(key) for key in self._lock_keys(payload)] if self._lock_keys else []
+
+    def validate_conditions(self, conditions):
+        return list(self._validate_conditions(conditions)) if self._validate_conditions else []
+
+    def describe_conditions(self, conditions):
+        if self._describe_conditions:
+            return self._describe_conditions(conditions)
+        return super().describe_conditions(conditions)
 
     def validate(self, approval_request):
         if self._validate:

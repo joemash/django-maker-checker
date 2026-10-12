@@ -356,6 +356,25 @@ class ApprovalRequest(ConcurrentTransitionMixin, models.Model):
         return self.stages.filter(order=self.current_stage).first()
 
 
+class ApprovalLock(models.Model):
+    """One item an open request is about to change, so no other open request can claim it.
+
+    A request holds one lock per key its handler returns from ``lock_keys`` (one per affected item, e.g. every
+    transaction in a manual match). Locks are taken in the same transaction as the request and released when it
+    closes; the unique constraint turns a second claim on the same item into a readable error.
+    """
+
+    tenant = models.ForeignKey(TENANT_MODEL, on_delete=models.CASCADE, related_name="+")
+    key = models.CharField(max_length=255)
+    request = models.ForeignKey("ApprovalRequest", on_delete=models.CASCADE, related_name="locks")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["tenant", "key"], name="approvals_lock_unique_key")]
+
+    def __str__(self):
+        return self.key
+
+
 def required_approvals_count(slot_count, require_all, required_approvals):
     """Approvals a stage needs from ``slot_count`` approver slots: N when the rule says N of M, every slot when it
     requires all, otherwise one."""

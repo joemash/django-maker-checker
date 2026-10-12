@@ -9,6 +9,7 @@ Reading them in this order takes you from "what is an action" to "what a host mu
 | `test_configuring_rules.py` | Rules (policies): workflows, approvers, SLA, validation, and which rule applies to a change |
 | `test_submitting.py` | Raising a request: what is captured, how stages are laid out, when submission is refused |
 | `test_deciding.py` | Approving and rejecting, segregation of duties, multi-approver rules, approval flows, failures and retry |
+| `test_locking_items.py` | Requests that touch several items: locking them across actions, and finding what's pending |
 | `test_requesting_changes.py` | Sending a request back to its maker, and resubmitting it as a new round |
 | `test_cancelling_and_the_timeline.py` | Cancelling, comments, views, and who may open a request |
 | `test_delegating.py` | Handing approvals to a colleague for a period |

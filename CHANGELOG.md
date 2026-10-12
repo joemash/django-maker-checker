@@ -4,6 +4,29 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## Unreleased
 
+## 0.6.0
+
+### Added
+
+- **Locking several items per request.** `ActionHandler.lock_keys(payload)` (and the `lock_keys=` option of
+  `@approval_action`) names every item a change touches, e.g. each transaction in a manual match. They are locked
+  while the request is open, across all action types, so no other open request can claim any of them; locks are
+  released when the request closes and taken again on retry or resubmission. New model `ApprovalLock`.
+- `queries.open_requests_for(tenant, keys)` returns the open request holding each item, for marking items that are
+  waiting for approval.
+- **Action-specific rule settings.** `ActionHandler.validate_conditions(conditions)` reports problems with a rule's
+  `conditions` through `PolicyError`, and `ActionHandler.describe_conditions(conditions)` describes them for rule
+  history (`validate_conditions=` / `describe_conditions=` on `@approval_action`).
+
+### Fixed
+
+- Retrying a failed request while another open request holds the same `lock_key` raised a database error; it now
+  gives the readable "already an open approval request" error.
+
+### Upgrading
+
+Run `migrate` (`approvals.0004`). Nothing changes for actions that don't define `lock_keys`.
+
 ## 0.5.0
 
 ### Added

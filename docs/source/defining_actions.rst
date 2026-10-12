@@ -5,63 +5,32 @@ Whether an action needs approval is data, decided per tenant by its rules. Code 
 captured, shown and applied. Each action is one handler registered under an ``action_type``; pick the lightest of
 three ways to write it:
 
-===================================================  =====================================  =============================
-The action is…                                       Use                                    You write
-===================================================  =====================================  =============================
-A service function you can call with plain values    ``@approval_action``                   A decorator
-A change to some fields of one model record          ``ModelChangeHandler``                 A subclass naming the fields
-Anything else: files, many records, external calls   ``ActionHandler``                      A full handler class
-===================================================  =====================================  =============================
+==============================.. list-table::
+   :header-rows: 1
+   :widths: 28 72
 
-In every case:
-
-- **One code path.** With no applicable rule the action runs immediately, so the call site is the same whether or not
-  a tenant has switched approval on.
-- **Payloads are JSON.** They are stored on the request and must survive a JSON round trip; ``Decimal`` and dates
-  arrive as strings. The same conversion happens when no approval is needed, so behaviour never depends on the rule.
-- **Register at start-up.** Import your handler modules from your app's ``AppConfig.ready()``. An action type can be
-  defined in only one place.
-
-``@approval_action``: defer a function call
--------------------------------------------
-
-The call is captured as the payload when a rule applies, and replayed as the maker's change once approved.
-
-.. code-block:: python
-
-   from django_maker_checker.actions import approval_action
-   from django_maker_checker.registry import Scope
-
-
-   @approval_action(
-       "balance_update",
-       label="Balance Update",
-       category="Balances",
-       lock_key=lambda p: f"{p['account_id']}:{p['balance_date']}",
-       target_label=lambda p: f"Account {p['account_id']} on {p['balance_date']}",
-       snapshot_before=lambda tenant, p: {"new_balance": current_balance(tenant, p)},
-       scopes=(Scope.GLOBAL, Scope.SCOPED),
-       scope_keys=lambda tenant, p: [f"department:{department_of(p['account_id'])}"],
-       matches=lambda policy, p: amount_above(policy.conditions.get("amount_gt"), p),
-   )
-   def update_balance(*, tenant, maker, context, account_id, balance_date, new_balance):
-       ...  # the change itself; context.actor is the final checker
-       return {"account_id": account_id}
-
-The function must take keyword-only arguments. ``tenant``, ``maker`` and ``context`` are supplied by the engine;
-everything else is the payload. Options:
-
-=====================  =============================================================================================
-Option                 Meaning
-=====================  =============================================================================================
-``lock_key``           Required. Identifies the item, so only one open request exists per item.
-``target_label``       The item's name in queues and notifications.
-``snapshot_before``    The item's current state, shown as "Current" when reviewing and kept on the request.
-``scopes``             Where rules may be configured: ``Scope.GLOBAL`` (tenant-wide) and/or ``Scope.SCOPED``.
-``scope_keys``         The scopes a change belongs to, most specific first; a scoped rule for any of them wins.
-``matches``            Whether a rule's ``conditions`` select this change, e.g. an amount threshold.
-``validate``           Re-check, right before applying, that the change can still be made.
-=====================  =============================================================================================
+   * - Option
+     - Meaning
+   * - ``lock_key``
+     - Required. Identifies the item, so only one open request exists per item.
+   * - ``target_label``
+     - The item's name in queues and notifications.
+   * - ``snapshot_before``
+     - The item's current state, shown as "Current" when reviewing and kept on the request.
+   * - ``scopes``
+     - Where rules may be configured: ``Scope.GLOBAL`` (tenant-wide) and/or ``Scope.SCOPED``.
+   * - ``scope_keys``
+     - The scopes a change belongs to, most specific first; a scoped rule for any of them wins.
+   * - ``matches``
+     - Whether a rule's ``conditions`` select this change, e.g. an amount threshold.
+   * - ``validate``
+     - Re-check, right before applying, that the change can still be made.
+   * - ``lock_keys``
+     - Every item the change touches; see `Changes that touch several items`_.
+   * - ``validate_conditions``
+     - Check the rule's ``conditions`` for this action; see :ref:`rules:Action-specific settings`.
+   * - ``describe_conditions``
+     - Describe the rule's ``conditions`` for rule history.
 
 Calling the decorated function returns an :class:`~django_maker_checker.actions.Outcome`: ``pending`` with the
 ``approval_request``, or the function's ``result``. ``update_balance.apply(...)`` calls the undecorated function, for
@@ -120,10 +89,13 @@ saved.
        review_template = "payments/review/payment_run.html"
 
        def lock_key(self, payload): ...                    # required
+       def lock_keys(self, payload): ...                   # every item touched, locked across actions
        def target_label(self, payload): ...
        def snapshot_before(self, tenant, payload): ...
        def scope_keys(self, tenant, payload): ...
        def matches(self, policy, payload): ...
+       def validate_conditions(self, conditions): ...      # problems with the rule's settings
+       def describe_conditions(self, conditions): ...      # the rule's settings, for history
        def validate(self, approval_request): ...           # raise ApprovalError if it can no longer be applied
        def execute(self, approval_request, context): ...   # apply; return a JSON-safe result
        def review_context(self, approval_request): ...     # data for review_template
@@ -144,6 +116,37 @@ Rules for ``execute()``:
 - Make writes to external systems safe to retry.
 - It is also called directly, with a stand-in request, when no rule applies, so it must not assume an approval took
   place.
+
+Changes that touch several items
+--------------------------------
+
+``lock_key`` names the one item a change is about, and stops a second open request of the same action for it. When
+a change touches several items, such as every transaction in a manual match, also return them from ``lock_keys``:
+
+.. code-block:: python
+
+   @approval_action(
+       "manual_match",
+       label="Manual Reconciliation",
+       category="Reconciliation",
+       lock_key=lambda p: f"txn:{p['transaction_id']}",                                # the transaction being matched
+       lock_keys=lambda p: [f"txn:{t}" for t in [p["transaction_id"], *p["matched_ids"]]],  # and everything it is matched to
+   )
+   def manual_match(*, tenant, maker, context, transaction_id, matched_ids, comment=""):
+       ...
+
+Every key is locked while the request is open, across all action types, so no other open request (a second match,
+or an unmatch of the same transaction) can claim any of them; the submission is refused with the reference of the
+request holding them. Locks are released when the request is applied, rejected, cancelled or fails, and taken again
+if it is retried or resubmitted.
+
+:func:`~django_maker_checker.queries.open_requests_for` returns the request holding each item, for marking items
+that are waiting for approval:
+
+.. code-block:: python
+
+   pending = queries.open_requests_for(tenant, [f"txn:{t.id}" for t in page_of_transactions])
+   # {"txn:42": <ApprovalRequest REQ-2610-00042>, ...}
 
 Guarding a model method used in many places
 -------------------------------------------

@@ -74,6 +74,15 @@ class ActionHandler:
         makers can't queue conflicting changes to the same item."""
         raise NotImplementedError
 
+    def lock_keys(self, payload: dict) -> list:
+        """Items the change affects that no other open request may claim, whatever its action type.
+
+        Use it when one request touches several items (e.g. every transaction in a manual match), or items that other
+        actions also change. These locks are taken in addition to ``lock_key``, and are what
+        ``queries.open_requests_for`` looks up, e.g. to badge items that are waiting for approval. Default: none.
+        """
+        return []
+
     def target_label(self, payload: dict) -> str:
         """Human name of the item, shown in queues and notifications. Stored on the request, so it outlives the
         item."""
@@ -92,6 +101,21 @@ class ActionHandler:
     def matches(self, policy, payload: dict) -> bool:
         """Whether ``policy.conditions`` select this payload. Default: every change is covered."""
         return True
+
+    def validate_conditions(self, conditions: dict) -> list:
+        """Problems with a rule's ``conditions`` for this action, as messages to show; empty when valid.
+
+        ``policies.save_policy`` reports them with the rule's other errors, so every screen and API enforces them.
+        """
+        return []
+
+    def describe_conditions(self, conditions: dict) -> dict:
+        """A rule's ``conditions`` in display form, ``{label: text}``, for rule history.
+
+        Revisions store this, so keep labels stable. Default: one "Conditions" row listing ``key=value`` pairs.
+        """
+        pairs = sorted((conditions or {}).items())
+        return {"Conditions": ", ".join(f"{name}={value}" for name, value in pairs) or "—"}
 
     # --- approval ------------------------------------------------------------------------------
 

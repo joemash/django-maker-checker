@@ -28,6 +28,7 @@ from django_maker_checker.models import (
     ApprovalDecision,
     ApprovalDelegation,
     ApprovalEvent,
+    ApprovalLock,
     ApprovalPolicy,
     ApprovalRequest,
     ApprovalStage,
@@ -171,6 +172,7 @@ def submit(action_type, *, tenant, maker, payload, justification="", policy=None
                 submitted_at=now,
             )
             _create_stages(approval_request, layout, now, policy.sla_minutes)
+            _take_locks(approval_request, handler.lock_keys(payload))
             _event(approval_request, EventType.CREATED, maker, _submitted_message(maker, handler, approval_request))
             transaction.on_commit(lambda: notify.request_submitted(approval_request))
     except IntegrityError:
@@ -248,6 +250,41 @@ def _create_stages(approval_request, layout, now, sla_minutes):
             ApprovalStageApprover(stage=stage, approver_user_id=s.approver_user_id, approver_role_id=s.approver_role_id)
             for s in plan.slots
         )
+
+
+def _take_locks(approval_request, keys):
+    """Claim the items in ``keys`` for the request (``ActionHandler.lock_keys``). An item another open request
+    already holds is refused with an error naming that request; the savepoint keeps the caller's transaction usable."""
+    keys = list(dict.fromkeys(keys))
+    if not keys:
+        return
+    try:
+        with transaction.atomic():
+            ApprovalLock.objects.bulk_create(
+                ApprovalLock(tenant_id=approval_request.tenant_id, key=key, request=approval_request) for key in keys
+            )
+    except IntegrityError:
+        raise _items_held_error(approval_request, keys) from None
+
+
+def _release_locks(approval_request):
+    """Free the request's items once it is no longer open."""
+    ApprovalLock.objects.filter(request=approval_request).delete()
+
+
+def _items_held_error(approval_request, keys):
+    holder = (
+        ApprovalLock.objects.filter(tenant_id=approval_request.tenant_id, key__in=keys)
+        .exclude(request=approval_request)
+        .select_related("request")
+        .first()
+    )
+    if holder:
+        return ApprovalError(
+            _("Another open approval request (%(reference)s) already covers some of these items.")
+            % {"reference": holder.request.reference}
+        )
+    return ApprovalError(_("Another open approval request already covers some of these items."))
 
 
 def _already_open_error(tenant, action_type, lock_key):
@@ -382,6 +419,7 @@ def _reject(approval_request, stage, slot, user, comment):
     except ValidationError as err:
         raise ApprovalError(" ".join(err.messages)) from None
     approval_request.save()
+    _release_locks(approval_request)
     stage.completed_at = timezone.now()
     stage.save(update_fields=["completed_at"])
     message = _("Rejected by %(who)s. Reason: %(reason)s") % {"who": _who(user, slot), "reason": comment}
@@ -484,6 +522,7 @@ def execute_approved(request_id, actor, http_request=None):
             result = handler.execute(approval_request, ExecutionContext(actor=actor, request=http_request))
             approval_request.mark_executed(result)
             approval_request.save()
+            _release_locks(approval_request)
             _event(approval_request, EventType.EXECUTED, None, _("Change applied."))
     except Exception as exc:  # noqa: BLE001 - any failure must be recorded, not lost
         if not isinstance(exc, ApprovalError):
@@ -493,6 +532,7 @@ def execute_approved(request_id, actor, http_request=None):
             if approval_request.status == RequestStatus.APPROVED:
                 approval_request.mark_failed(exc)
                 approval_request.save()
+                _release_locks(approval_request)
                 _event(
                     approval_request,
                     EventType.FAILED,
@@ -511,7 +551,15 @@ def retry(request_id, user, http_request=None):
         if not can_retry(user, approval_request):
             raise ApprovalError(_("Only approval administrators can retry a failed request."))
         approval_request.retry()
-        approval_request.save()
+        try:
+            # Retrying reopens the request, so its item must not have been claimed by another request meanwhile.
+            with transaction.atomic():
+                approval_request.save()
+        except IntegrityError:
+            raise _already_open_error(
+                approval_request.tenant, approval_request.action_type, approval_request.lock_key
+            ) from None
+        _take_locks(approval_request, get_handler(approval_request.action_type).lock_keys(approval_request.payload))
         _event(
             approval_request,
             EventType.RETRIED,
@@ -529,6 +577,7 @@ def cancel(request_id, user, reason=""):
             raise ApprovalError(_("You cannot cancel this request."))
         approval_request.cancel(by=user)
         approval_request.save()
+        _release_locks(approval_request)
         by_maker = user.id == approval_request.maker_id
         message = _cancelled_message(user, by_maker, reason.strip())
         _event(approval_request, EventType.CANCELLED, user, message)
@@ -587,6 +636,8 @@ def _replace_payload(approval_request, handler, payload):
         raise ApprovalError(_("A resubmitted request must still change the same item."))
     approval_request.payload = payload
     approval_request.target_label = handler.target_label(payload)[:255]
+    _release_locks(approval_request)
+    _take_locks(approval_request, handler.lock_keys(payload))
 
 
 def _plans_of(approval_request):
