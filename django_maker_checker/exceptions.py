@@ -1,5 +1,7 @@
 """Exceptions raised to callers. Messages are written for end users, since hosts usually show them as-is."""
 
+from django.utils.translation import gettext as _
+
 
 class ApprovalError(Exception):
     """A maker-checker operation was refused; the message is safe to show to the user."""
@@ -16,6 +18,6 @@ class ApprovalPending(ValueError):
         # Keep the request so callers can show its reference or link to it.
         self.approval_request = approval_request
         super().__init__(
-            f"Submitted for approval as {approval_request.reference}. "
-            "The change will be applied once a checker approves it."
+            _("Submitted for approval as %(reference)s. The change will be applied once a checker approves it.")
+            % {"reference": approval_request.reference}
         )

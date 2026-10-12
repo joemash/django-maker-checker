@@ -112,6 +112,26 @@ class MultiApproverRules(EngineTestCase):
         self.assertEqual(services.decide(req.pk, self.checker2, Decision.APPROVE).status, RequestStatus.EXECUTED)
 
 
+class NOfMApprovals(EngineTestCase):
+    """A Multiple Approvers rule can require any N of its approvers; a role listed twice needs two of its members."""
+
+    def test_the_change_applies_once_n_of_the_approvers_have_approved(self):
+        self.policy(
+            PUBLISH, [self.checker1, self.checker2, self.admin], workflow=WorkflowType.MULTI, required_approvals=2
+        )
+        req = services.decide(self.raise_request().pk, self.admin, Decision.APPROVE)
+        self.assertEqual(req.status, RequestStatus.PENDING)
+        self.assertIn("(1 of 2 required approvals)", req.events.last().message)
+        self.assertEqual(services.decide(req.pk, self.checker2, Decision.APPROVE).status, RequestStatus.EXECUTED)
+
+    def test_a_role_listed_twice_needs_two_different_members(self):
+        self.policy(PUBLISH, [self.role_reviewer, self.role_reviewer], workflow=WorkflowType.MULTI, require_all=True)
+        req = services.decide(self.raise_request().pk, self.checker1, Decision.APPROVE)
+        with self.assertRaisesMessage(ApprovalError, "already acted"):
+            services.decide(req.pk, self.checker1, Decision.APPROVE)
+        self.assertEqual(services.decide(req.pk, self.checker2, Decision.APPROVE).status, RequestStatus.EXECUTED)
+
+
 class ApprovalFlows(EngineTestCase):
     def setUp(self):
         super().setUp()

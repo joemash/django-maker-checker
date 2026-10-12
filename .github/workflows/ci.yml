@@ -51,7 +51,7 @@ jobs:
         image: postgres:17
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust  # disposable CI database, no password
           POSTGRES_DB: maker_checker
         ports: ["5432:5432"]
         options: >-
@@ -60,7 +60,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@localhost:5432/maker_checker' || '' }}
+      DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres@localhost:5432/maker_checker' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -68,6 +68,45 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m pip install --upgrade pip tox
       - run: tox -e ${{ matrix.toxenv }}
+
+  coverage:
+    # One run with write access, separate from the read-only test matrix: it publishes the README coverage badge (to
+    # the python-coverage-comment-action-data branch) on main, and comments coverage on pull requests.
+    name: Coverage report
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+      pull-requests: write
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust  # disposable CI database, no password
+          POSTGRES_DB: maker_checker
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres@localhost:5432/maker_checker
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip tox
+      - run: tox -e py313-dj61
+      - uses: py-cov-action/python-coverage-comment-action@v4.5
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          MINIMUM_GREEN: 90
+          MINIMUM_ORANGE: 80
 
   docs:
     name: Build the documentation

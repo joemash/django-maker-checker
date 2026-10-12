@@ -94,6 +94,16 @@ class SubmissionIsRefused(EngineTestCase):
         with self.assertRaisesMessage(ApprovalError, "for step 2"):
             self.publish()
 
+    def test_when_fewer_people_than_the_required_approvals_could_approve(self):
+        self.policy(PUBLISH, [self.maker, self.checker1], workflow=WorkflowType.MULTI, require_all=True)
+        with self.assertRaisesMessage(ApprovalError, "2 approvals are needed, but only 1 eligible approver"):
+            self.publish()
+
+    def test_when_a_role_is_listed_more_times_than_it_has_eligible_members(self):
+        self.policy(PUBLISH, [self.role_admin, self.role_admin], workflow=WorkflowType.MULTI, required_approvals=2)
+        with self.assertRaisesMessage(ApprovalError, "2 approvals are needed"):
+            self.publish()
+
     def test_while_another_request_for_the_same_item_is_open_naming_that_request(self):
         self.policy(PUBLISH, [self.role_reviewer])
         first = self.raise_request()

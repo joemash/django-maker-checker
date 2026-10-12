@@ -33,9 +33,13 @@ Workflows
 Workflow            Approval needed
 ==================  ==========================================================================
 Single Approver     One named user or role
-Multiple Approvers  Any one of several, or all of them (``require_all``)
+Multiple Approvers  Any one of several, any N of them (``required_approvals``), or all of
+                    them (``require_all``)
 Approval Flow       Ordered steps; each step is decided before the next one starts
 ==================  ==========================================================================
+
+Each approver is a *slot* that one person fills. A role listed twice therefore needs two different members of it,
+which is how "two people from Finance" is written.
 
 Each request is split into *stages*: Single and Multiple Approvers have one stage, and an Approval Flow has one stage
 per step. Only the current stage's approvers can decide.
@@ -56,7 +60,9 @@ Life cycle
                                       │
              ┌────────────── cancel ──┼── reject (reason required) ──► REJECTED
              ▼                        │
-         CANCELLED                    │ approve (each stage / approver)
+         CANCELLED ◄── cancel ── CHANGES_REQUESTED ◄── request changes (note required)
+                                      │        └── resubmit (new round) ──► PENDING
+                                      │ approve (each stage / approver)
                                       ▼
                                   APPROVED ──► handler.validate() + handler.execute()
                                       │                    │
@@ -80,13 +86,26 @@ Who may decide
 
 1. are an active member of the request's tenant;
 2. are not the maker (there is no superuser or staff exception);
-3. have not acted on this request already, so one person can't approve two steps;
+3. have not acted on this request already in this round, so one person can't approve two steps;
 4. hold ``approve_<action_type>``;
 5. fill an open slot on the **current** stage: they are the named user, hold the named role, or are the escalation
    approver.
 
 A delegate satisfies 4 and 5 through the delegator. Submission is refused up front when no one other than the maker
 could approve a stage, so a request can never wait for someone who can't decide it.
+
+Requesting changes
+------------------
+
+Besides approving and rejecting, a current approver can send a request back to its maker with
+``Decision.REQUEST_CHANGES`` and a note saying what to change. While the request is with the maker, nobody can
+decide it, its SLA is paused, and it keeps its lock on the item. The maker then either withdraws it with
+:func:`~django_maker_checker.services.cancel`, or calls :func:`~django_maker_checker.services.resubmit`, optionally
+with an amended payload for the same item.
+
+Resubmission starts a new *round*: the item is snapshotted again, approval restarts from the first step with a fresh
+SLA, and approvals from the earlier round no longer count, because they approved a different change. Everyone,
+including the approver who asked for changes, may decide again.
 
 Delegation
 ----------

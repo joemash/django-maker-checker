@@ -38,28 +38,36 @@ MySQL / MariaDB        Not recommended. They ignore Django's conditional unique 
 Settings
 --------
 
-Add the app and point the engine at your tenant model, role model and adapter:
+Add the app to ``INSTALLED_APPS`` and migrate:
 
 .. code-block:: python
 
    INSTALLED_APPS = [
        ...,
+       "django.contrib.auth",
+       "django.contrib.contenttypes",
        "django_maker_checker",
-       "approvals_integration",  # your app holding the adapter and guarded actions
    ]
-
-   APPROVALS_TENANT_MODEL = "accounts.Organisation"
-   APPROVALS_ROLE_MODEL = "accounts.Role"
-   APPROVALS_ADAPTER = "approvals_integration.adapter.Approvals"
-
-Then migrate:
 
 .. code-block:: bash
 
    python manage.py migrate
 
-The engine's app label is ``approvals``, so its tables are named ``approvals_*``. All settings, including the optional
-ones, are listed in :doc:`settings`.
+That is enough for a **single-tenant** project: the engine uses Django's own users, groups and permissions through
+its built-in adapter (see :ref:`integration:The built-in adapter`).
+
+For a **multi-tenant** project, or one with its own roles or permission system, point the engine at your models and
+your adapter:
+
+.. code-block:: python
+
+   APPROVALS_TENANT_MODEL = "accounts.Organisation"
+   APPROVALS_ROLE_MODEL = "accounts.Role"
+   APPROVALS_ADAPTER = "approvals_integration.adapter.Approvals"
+
+Decide this before the first ``migrate``: like ``AUTH_USER_MODEL``, the tenant and role models can't be changed
+later. The engine's app label is ``approvals``, so its tables are named ``approvals_*``. All settings are listed in
+:doc:`settings`.
 
 If your tenant or role model is created after your app's first migration, see
 :ref:`integration:Migration order`.

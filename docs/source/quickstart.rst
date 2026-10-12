@@ -1,64 +1,11 @@
 Quick start
 ===========
 
-This walk-through puts a credit-limit change behind maker-checker in a project where each user has a ``Membership``
-in one ``Organisation`` with one ``Role``. It assumes the :doc:`installation` steps are done.
+This walk-through puts a credit-limit change behind maker-checker in a single-tenant project on Django's own users,
+groups and permissions, which needs no configuration beyond :doc:`installation`. For your own tenants, roles or
+permission system, see :doc:`integration`.
 
-1. Tell the engine about your users
------------------------------------
-
-The engine never imports your code. Everything it needs to know about tenants, roles, permissions, notifications and
-auditing goes through one adapter class (see :doc:`integration` for every method):
-
-.. code-block:: python
-
-   # approvals_integration/adapter.py
-   from django.contrib.auth import get_user_model
-   from django.db.models import Q
-
-   from django_maker_checker.adapter import ApprovalsAdapter
-   from accounts.models import Membership, Role
-
-
-   class Approvals(ApprovalsAdapter):
-       def _membership(self, user):
-           return Membership.objects.filter(user=user, active=True).select_related("organisation", "role").first()
-
-       def tenant_of(self, user):
-           membership = self._membership(user)
-           return membership.organisation if membership and user.is_active else None
-
-       def members(self, tenant, user_ids=None, role_ids=None):
-           users = get_user_model().objects.filter(
-               membership__organisation=tenant, membership__active=True, is_active=True
-           )
-           if user_ids is not None or role_ids is not None:
-               users = users.filter(Q(pk__in=user_ids or ()) | Q(membership__role_id__in=role_ids or ()))
-           return users.distinct()
-
-       def role_ids_of(self, user):
-           membership = self._membership(user)
-           return {membership.role_id} if membership and membership.role_id else set()
-
-       def roles(self, tenant):
-           return Role.objects.filter(organisation=tenant)
-
-       def role_member_count(self, role):
-           return Membership.objects.filter(role=role, active=True).count()
-
-       def has_permission(self, user, codename):
-           return user.has_perm(f"accounts.{codename}")
-
-       def role_has_permission(self, role, codename):
-           return role.permissions.filter(codename=codename).exists()
-
-       def notify(self, notice):
-           ...  # send notice.text to notice.recipients by email, in-app or chat
-
-       def audit(self, record):
-           ...  # write the AuditRecord to your audit log
-
-2. Guard the action
+1. Guard the action
 -------------------
 
 Decorate the function that makes the change. Its arguments become the request's payload, so they must be
@@ -66,7 +13,7 @@ JSON-serialisable:
 
 .. code-block:: python
 
-   # approvals_integration/actions.py
+   # accounts/approvals.py
    from django_maker_checker.actions import approval_action
 
 
@@ -78,28 +25,32 @@ JSON-serialisable:
        target_label=lambda p: f"Account {p['account_id']}",
    )
    def change_credit_limit(*, tenant, maker, context, account_id, new_limit):
-       Account.objects.filter(pk=account_id, organisation=tenant).update(credit_limit=new_limit)
+       Account.objects.filter(pk=account_id).update(credit_limit=new_limit)
        return {"account_id": account_id}
 
 Register it at start-up by importing the module from your app's ``AppConfig.ready()``:
 
 .. code-block:: python
 
-   class ApprovalsIntegrationConfig(AppConfig):
-       name = "approvals_integration"
+   class AccountsConfig(AppConfig):
+       name = "accounts"
 
        def ready(self):
-           from approvals_integration import actions  # noqa: F401  (registers the actions)
+           from accounts import approvals  # noqa: F401  (registers the action)
 
-3. Call it
+The next ``migrate`` creates its permission, ``approvals.approve_credit_limit_change``.
+
+2. Call it
 ----------
 
 Call the function as before, adding the maker and a justification:
 
 .. code-block:: python
 
+   from django_maker_checker.models import Tenant
+
    outcome = change_credit_limit(
-       tenant=request.user.membership.organisation,
+       tenant=Tenant.default(),
        maker=request.user,
        request=request,
        justification="Annual review",
@@ -109,8 +60,21 @@ Call the function as before, adding the maker and a justification:
    if outcome.pending:
        messages.info(request, f"Sent for approval as {outcome.approval_request.reference}.")
 
-With no rule configured for the tenant the function simply runs, so adding maker-checker changes nothing until a
-tenant switches it on.
+With no rule configured the function simply runs, so adding maker-checker changes nothing until a rule is switched
+on.
+
+3. Choose the approvers
+-----------------------
+
+Approvers are users, or groups whose members may approve. Give a group the action's permission:
+
+.. code-block:: python
+
+   from django.contrib.auth.models import Group, Permission
+
+   risk = Group.objects.create(name="Risk officers")
+   risk.permissions.add(Permission.objects.get(codename="approve_credit_limit_change"))
+   risk_officer.groups.add(risk)
 
 4. Switch on a rule
 -------------------
@@ -120,22 +84,20 @@ tenant switches it on.
    from django_maker_checker import policies
    from django_maker_checker.constants import WorkflowType
 
-   rule = policies.policy_for(organisation, "credit_limit_change")
+   rule = policies.policy_for(Tenant.default(), "credit_limit_change")
    policies.save_policy(
        rule,
-       policies.PolicySpec(workflow_type=WorkflowType.SINGLE, approvers=[f"r:{risk_officer_role.pk}"]),
+       policies.PolicySpec(workflow_type=WorkflowType.SINGLE, approvers=[f"r:{risk.pk}"]),
        by=admin_user,
        reason="New credit policy",
    )
 
-Approvers are tokens: ``u:<user id>`` for a user, ``r:<role id>`` for every member of a role. They must hold the
-action's permission, here ``approve_credit_limit_change``; the engine names it and your project grants it (see
-:ref:`integration:Permissions`).
+Approvers are tokens: ``u:<user id>`` for a user, ``r:<role id>`` for every member of a role (here, a group). From
+now on, calling ``change_credit_limit`` raises an approval request instead of changing the limit, and the risk
+officers are emailed.
 
-From now on, calling ``change_credit_limit`` raises an approval request instead of changing the limit.
-
-5. Approve
-----------
+5. Decide
+---------
 
 .. code-block:: python
 
@@ -144,15 +106,18 @@ From now on, calling ``change_credit_limit`` raises an approval request instead 
 
    services.decide(approval_request.pk, risk_officer, Decision.APPROVE, "Within appetite")
 
-The credit limit changes now, recorded as the maker's change. Rejecting needs a reason:
+The credit limit changes now, recorded as the maker's change. A checker can also reject (with a reason) or send the
+request back to the maker for changes:
 
 .. code-block:: python
 
    services.decide(approval_request.pk, risk_officer, Decision.REJECT, "Exceeds appetite")
+   services.decide(approval_request.pk, risk_officer, Decision.REQUEST_CHANGES, "Attach the latest statements")
 
 Next steps
 ----------
 
 - :doc:`concepts` explains the life cycle, who may decide, SLAs and the audit trail.
 - :doc:`defining_actions` covers record edits and fully custom actions.
+- :doc:`rules` covers workflows such as "2 of 3 approvers" and approval flows.
 - :doc:`building_a_ui` lists the queries for building approval screens.

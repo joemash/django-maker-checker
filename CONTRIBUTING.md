@@ -15,14 +15,15 @@ cd django-maker-checker
 python -m venv .venv && source .venv/bin/activate   # or: uv venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pre-commit install
-pytest
+pytest                               # the multi-tenant test project
+pytest --ds tests.settings_single    # the single-tenant test project
 ```
 
 The tests use SQLite by default. To run them against PostgreSQL, as CI does:
 
 ```bash
-docker run -d --rm --name dmc-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=maker_checker -p 55432:5432 postgres:17
-DATABASE_URL=postgres://postgres:postgres@localhost:55432/maker_checker pytest
+docker run -d --rm --name dmc-pg -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=maker_checker -p 55432:5432 postgres:17
+DATABASE_URL=postgres://postgres@localhost:55432/maker_checker pytest
 ```
 
 `tox` runs what CI runs: linting, code quality, security checks and the Python × Django test matrix

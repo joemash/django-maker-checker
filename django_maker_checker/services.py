@@ -6,7 +6,9 @@ a change twice; notifications run on commit.
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
+from typing import Optional
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -14,6 +16,8 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.translation import gettext as _
+from django.utils.translation import ngettext
 
 from django_maker_checker import audit, notify
 from django_maker_checker.adapter import AuditRecord
@@ -28,19 +32,21 @@ from django_maker_checker.models import (
     ApprovalRequest,
     ApprovalStage,
     ApprovalStageApprover,
+    required_approvals_count,
 )
 from django_maker_checker.permissions import (
     can_cancel,
+    can_resubmit,
     can_retry,
     can_view,
+    decided_this_round,
     decision_slot,
     eligible_checkers,
     has_approve_permission,
-    has_decided,
     is_member_of,
 )
 from django_maker_checker.policies import current_version
-from django_maker_checker.registry import ExecutionContext, Scope, all_handlers, get_handler
+from django_maker_checker.registry import ExecutionContext, Scope, all_handlers, get_handler, to_payload
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +90,7 @@ def requires_approval(tenant, action_type, payload=None) -> bool:
 
 def parse_token(token):
     """``u:<id>`` / ``r:<id>`` to ``(user, role)``; unknown tokens give ``(None, None)``."""
-    kind, _, raw_id = (token or "").partition(":")
+    kind, _separator, raw_id = (token or "").partition(":")
     if not raw_id.isdigit():
         return None, None
     if kind == "u":
@@ -94,18 +100,31 @@ def parse_token(token):
     return None, None
 
 
-def _stage_layout(policy):
-    """Approver slots per stage, as ``(slots, require_all)``.
+@dataclass(frozen=True)
+class _StagePlan:
+    """One stage to create: its approver slots and how many of them must approve."""
 
-    SINGLE uses the first slot only; MULTI puts every slot in one stage (any one, or all with ``require_all``);
-    SEQUENTIAL makes one stage per slot, in order.
+    slots: list
+    require_all: bool = False
+    required_approvals: Optional[int] = None
+
+    @property
+    def required(self):
+        return required_approvals_count(len(self.slots), self.require_all, self.required_approvals)
+
+
+def _stage_layout(policy):
+    """The stages a request under ``policy`` gets.
+
+    SINGLE uses the first slot only; MULTI puts every slot in one stage (any one, N of them, or all); SEQUENTIAL makes
+    one stage per slot, in order.
     """
     approvers = policy.ordered_approvers()
     if policy.workflow_type == WorkflowType.SEQUENTIAL:
-        return [([a], False) for a in approvers]
+        return [_StagePlan([a]) for a in approvers]
     if policy.workflow_type == WorkflowType.MULTI:
-        return [(approvers, policy.require_all)]
-    return [(approvers[:1], False)]
+        return [_StagePlan(approvers, policy.require_all, policy.required_approvals)]
+    return [_StagePlan(approvers[:1])]
 
 
 def _sla_due(start, sla_minutes):
@@ -123,10 +142,10 @@ def submit(action_type, *, tenant, maker, payload, justification="", policy=None
     """
     handler = get_handler(action_type)
     if not get_adapter().is_enabled(tenant):
-        raise ApprovalError("Approvals are switched off for this organisation.")
+        raise ApprovalError(_("Approvals are switched off for this organisation."))
     policy = policy or find_policy(tenant, action_type, payload)
     if policy is None:
-        raise ApprovalError("No approval policy applies to this action.")
+        raise ApprovalError(_("No approval policy applies to this action."))
 
     layout = _stage_layout(policy)
     _ensure_every_stage_has_a_checker(tenant, action_type, layout, maker)
@@ -152,8 +171,7 @@ def submit(action_type, *, tenant, maker, payload, justification="", policy=None
                 submitted_at=now,
             )
             _create_stages(approval_request, layout, now, policy.sla_minutes)
-            target = f" for {approval_request.target_label}" if approval_request.target_label else ""
-            _event(approval_request, EventType.CREATED, maker, f"{_name(maker)} submitted {handler.label}{target}.")
+            _event(approval_request, EventType.CREATED, maker, _submitted_message(maker, handler, approval_request))
             transaction.on_commit(lambda: notify.request_submitted(approval_request))
     except IntegrityError:
         raise _already_open_error(tenant, action_type, lock_key) from None
@@ -164,30 +182,71 @@ def submit(action_type, *, tenant, maker, payload, justification="", policy=None
 
 
 def _ensure_every_stage_has_a_checker(tenant, action_type, layout, maker):
-    for number, (slots, _) in enumerate(layout, start=1):
-        if not eligible_checkers(tenant, action_type, slots, exclude_user_ids=[maker.id]):
-            step = f" for step {number}" if len(layout) > 1 else ""
-            raise ApprovalError(
-                f"No eligible approver other than you is configured{step}. "
-                "Ask an administrator to update the approval configuration."
+    """Each stage needs as many eligible people other than the maker as it needs approvals, otherwise the request
+    could never complete."""
+    for number, plan in enumerate(layout, start=1):
+        eligible = len(eligible_checkers(tenant, action_type, plan.slots, exclude_user_ids=[maker.id]))
+        if eligible >= plan.required:
+            continue
+        problem = _missing_checkers_message(number if len(layout) > 1 else None, plan.required, eligible)
+        raise ApprovalError(
+            _("%(problem)s Ask an administrator to update the approval configuration.") % {"problem": problem}
+        )
+
+
+def _missing_checkers_message(step, required, eligible):
+    """Why a stage can't be approved; ``step`` is None for a single-stage request."""
+    if eligible == 0:
+        if step is None:
+            return _("No eligible approver other than you is configured.")
+        return _("No eligible approver other than you is configured for step %(step)s.") % {"step": step}
+    values = {"required": required, "eligible": eligible, "step": step}
+    if step is None:
+        return (
+            ngettext(
+                "%(required)s approvals are needed, but only %(eligible)s eligible approver other than you "
+                "is configured.",
+                "%(required)s approvals are needed, but only %(eligible)s eligible approvers other than you "
+                "are configured.",
+                eligible,
             )
+            % values
+        )
+    return (
+        ngettext(
+            "%(required)s approvals are needed for step %(step)s, but only %(eligible)s eligible approver "
+            "other than you is configured.",
+            "%(required)s approvals are needed for step %(step)s, but only %(eligible)s eligible approvers "
+            "other than you are configured.",
+            eligible,
+        )
+        % values
+    )
+
+
+def _submitted_message(maker, handler, approval_request):
+    values = {"maker": _name(maker), "action": handler.label, "target": approval_request.target_label}
+    if approval_request.target_label:
+        return _("%(maker)s submitted %(action)s for %(target)s.") % values
+    return _("%(maker)s submitted %(action)s.") % values
 
 
 def _create_stages(approval_request, layout, now, sla_minutes):
     """One stage per layout entry, copying the policy's approver slots. Only the first stage starts (and gets an SLA
     deadline) now; later ones start when the previous stage completes."""
-    for order, (slots, require_all) in enumerate(layout):
+    for order, plan in enumerate(layout):
         first = order == 0
         stage = ApprovalStage.objects.create(
             request=approval_request,
             order=order,
-            require_all=require_all,
+            require_all=plan.require_all,
+            required_approvals=plan.required_approvals,
             started_at=now if first else None,
             due_at=_sla_due(now, sla_minutes) if first else None,
         )
         ApprovalStageApprover.objects.bulk_create(
             ApprovalStageApprover(stage=stage, approver_user_id=s.approver_user_id, approver_role_id=s.approver_role_id)
-            for s in slots
+            for s in plan.slots
         )
 
 
@@ -196,8 +255,12 @@ def _already_open_error(tenant, action_type, lock_key):
     existing = ApprovalRequest.objects.filter(
         tenant=tenant, action_type=action_type, lock_key=lock_key, status__in=RequestStatus.OPEN
     ).first()
-    reference = f" ({existing.reference})" if existing else ""
-    return ApprovalError(f"There is already an open approval request{reference} for this item.")
+    if existing:
+        return ApprovalError(
+            _("There is already an open approval request (%(reference)s) for this item.")
+            % {"reference": existing.reference}
+        )
+    return ApprovalError(_("There is already an open approval request for this item."))
 
 
 class _Direct:
@@ -239,29 +302,28 @@ def submit_or_execute(action_type, *, tenant, maker, payload, justification="", 
 
 def _refusal_reason(user, approval_request):
     # The most specific explanation for why decision_slot() refused, for the error shown to the user.
+    if approval_request.status == RequestStatus.CHANGES_REQUESTED:
+        return _("This request was sent back to its maker for changes.")
     if approval_request.status != RequestStatus.PENDING:
-        return f"This request is already {approval_request.get_status_display().lower()}."
+        return _("This request is already %(status)s.") % {"status": approval_request.get_status_display().lower()}
     if user.id == approval_request.maker_id:
-        return "You cannot approve or reject a request you raised."
-    if has_decided(user, approval_request):
-        return "You have already acted on this request."
-    return "You are not an approver for the current step of this request."
+        return _("You cannot approve or reject a request you raised.")
+    if decided_this_round(user, approval_request):
+        return _("You have already acted on this request.")
+    return _("You are not an approver for the current step of this request.")
 
 
 def decide(request_id, user, decision, comment="", http_request=None):
-    """Record ``user``'s approve/reject on the request's current stage and move the request on.
+    """Record ``user``'s decision on the request's current stage and move the request on.
 
     The request row is locked for the whole decision, so concurrent checkers are serialised and each sees the
-    other's effect. A rejection ends the request. An approval fills the user's slot. When that completes the stage,
+    other's effect. A rejection ends the request. Requesting changes sends it back to the maker, who can amend and
+    ``resubmit`` it (or cancel it). An approval fills the user's slot. When that completes the stage,
     the request either moves to the next stage (which starts its own SLA window, and its checkers are notified) or,
     on the last stage, becomes APPROVED. The change is then applied by ``execute_approved`` *after* the decision
     commits, so a failure to apply can never undo the approval.
     """
-    if decision not in (Decision.APPROVE, Decision.REJECT):
-        raise ApprovalError("Unknown decision.")
-    comment = (comment or "").strip()
-    if decision == Decision.REJECT and not comment:
-        raise ApprovalError("A reason is required to reject a request.")
+    comment = _checked_comment(decision, comment)
 
     with transaction.atomic():
         approval_request = ApprovalRequest.objects.select_for_update().get(pk=request_id)
@@ -276,10 +338,13 @@ def decide(request_id, user, decision, comment="", http_request=None):
             on_behalf_of=slot.on_behalf_of,
             decision=decision,
             comment=comment,
+            submission=approval_request.submission,
         )
+        fully_approved = False
         if decision == Decision.REJECT:
             _reject(approval_request, stage, slot, user, comment)
-            fully_approved = False
+        elif decision == Decision.REQUEST_CHANGES:
+            _send_back(approval_request, slot, user, comment)
         else:
             fully_approved = _approve(approval_request, stage, slot, user, comment)
 
@@ -291,10 +356,22 @@ def decide(request_id, user, decision, comment="", http_request=None):
     return approval_request
 
 
+def _checked_comment(decision, comment):
+    """The decision's comment, stripped; refuses unknown decisions, and rejections or change requests without one."""
+    if decision not in dict(Decision.CHOICES):
+        raise ApprovalError(_("Unknown decision."))
+    comment = (comment or "").strip()
+    if decision == Decision.REJECT and not comment:
+        raise ApprovalError(_("A reason is required to reject a request."))
+    if decision == Decision.REQUEST_CHANGES and not comment:
+        raise ApprovalError(_("Say what needs to change."))
+    return comment
+
+
 def _who(user, slot):
     """Who acted, for timeline messages: "Chris", or "Chris on behalf of Carol" when delegated."""
     if slot.on_behalf_of:
-        return f"{_name(user)} on behalf of {_name(slot.on_behalf_of)}"
+        return _("%(actor)s on behalf of %(delegator)s") % {"actor": _name(user), "delegator": _name(slot.on_behalf_of)}
     return _name(user)
 
 
@@ -307,8 +384,18 @@ def _reject(approval_request, stage, slot, user, comment):
     approval_request.save()
     stage.completed_at = timezone.now()
     stage.save(update_fields=["completed_at"])
-    _event(approval_request, EventType.REJECTED, user, f"Rejected by {_who(user, slot)}. Reason: {comment}")
+    message = _("Rejected by %(who)s. Reason: %(reason)s") % {"who": _who(user, slot), "reason": comment}
+    _event(approval_request, EventType.REJECTED, user, message)
     transaction.on_commit(lambda: notify.request_decided(approval_request))
+
+
+def _send_back(approval_request, slot, user, note):
+    """Return the request to its maker. It keeps its lock on the item, and its SLA pauses until it is resubmitted."""
+    approval_request.request_changes(note=note)
+    approval_request.save()
+    message = _("Changes requested by %(who)s: %(note)s") % {"who": _who(user, slot), "note": note}
+    _event(approval_request, EventType.CHANGES_REQUESTED, user, message)
+    transaction.on_commit(lambda: notify.changes_requested(approval_request, note))
 
 
 def _approve(approval_request, stage, slot, user, comment):
@@ -323,7 +410,11 @@ def _approve(approval_request, stage, slot, user, comment):
 
     if not _stage_complete(stage, approver):
         done, total = stage_progress_counts(stage)
-        message = f"Approved by {_who(user, slot)} ({done} of {total} required approvals)."
+        message = _("Approved by %(who)s (%(done)s of %(total)s required approvals).") % {
+            "who": _who(user, slot),
+            "done": done,
+            "total": total,
+        }
         _event(approval_request, EventType.STAGE_APPROVED, user, message)
         return False
 
@@ -332,14 +423,18 @@ def _approve(approval_request, stage, slot, user, comment):
     next_stage = approval_request.stages.filter(order=stage.order + 1).first()
     if next_stage is not None:
         _start_stage(approval_request, next_stage, now)
-        message = f"Step {stage.order + 1} approved by {_who(user, slot)}; routed to step {next_stage.order + 1}."
+        message = _("Step %(step)s approved by %(who)s; routed to step %(next)s.") % {
+            "step": stage.order + 1,
+            "who": _who(user, slot),
+            "next": next_stage.order + 1,
+        }
         _event(approval_request, EventType.STAGE_APPROVED, user, message)
         transaction.on_commit(lambda: notify.request_submitted(approval_request))
         return False
 
     approval_request.approve(by=user)
     approval_request.save()
-    _event(approval_request, EventType.APPROVED, user, f"Approved by {_who(user, slot)}.")
+    _event(approval_request, EventType.APPROVED, user, _("Approved by %(who)s.") % {"who": _who(user, slot)})
     return True
 
 
@@ -358,16 +453,16 @@ def stage_progress_counts(stage):
     Escalation slots are excluded: they complete a stage on their own and aren't part of "N of M approvals".
     """
     regular = [a for a in stage.approvers.all() if not a.is_escalation]
-    return sum(1 for a in regular if a.satisfied_at), len(regular)
+    return sum(1 for a in regular if a.satisfied_at), stage.required_count(regular)
 
 
 def _stage_complete(stage, approver):
-    """A stage completes on the first approval unless it requires all approvers. An escalation approver's approval
-    completes it regardless, since escalation exists to unblock a stalled step."""
-    if approver.is_escalation or not stage.require_all:
+    """A stage completes once it has the approvals it requires (one, N of M, or all). An escalation approver's
+    approval completes it regardless, since escalation exists to unblock a stalled step."""
+    if approver.is_escalation:
         return True
-    done, total = stage_progress_counts(stage)
-    return done >= total
+    done, required = stage_progress_counts(stage)
+    return done >= required
 
 
 def execute_approved(request_id, actor, http_request=None):
@@ -389,7 +484,7 @@ def execute_approved(request_id, actor, http_request=None):
             result = handler.execute(approval_request, ExecutionContext(actor=actor, request=http_request))
             approval_request.mark_executed(result)
             approval_request.save()
-            _event(approval_request, EventType.EXECUTED, None, "Change applied.")
+            _event(approval_request, EventType.EXECUTED, None, _("Change applied."))
     except Exception as exc:  # noqa: BLE001 - any failure must be recorded, not lost
         if not isinstance(exc, ApprovalError):
             logger.exception("Executing approval request %s failed", request_id)
@@ -398,7 +493,12 @@ def execute_approved(request_id, actor, http_request=None):
             if approval_request.status == RequestStatus.APPROVED:
                 approval_request.mark_failed(exc)
                 approval_request.save()
-                _event(approval_request, EventType.FAILED, None, f"Applying the change failed: {exc}")
+                _event(
+                    approval_request,
+                    EventType.FAILED,
+                    None,
+                    _("Applying the change failed: %(error)s") % {"error": exc},
+                )
     _bump(approval_request.tenant_id)
     _audit(approval_request, "updated", actor, after={"status": approval_request.status})
     return approval_request
@@ -409,10 +509,15 @@ def retry(request_id, user, http_request=None):
     with transaction.atomic():
         approval_request = ApprovalRequest.objects.select_for_update().get(pk=request_id)
         if not can_retry(user, approval_request):
-            raise ApprovalError("Only approval administrators can retry a failed request.")
+            raise ApprovalError(_("Only approval administrators can retry a failed request."))
         approval_request.retry()
         approval_request.save()
-        _event(approval_request, EventType.RETRIED, user, f"{_name(user)} retried applying the change.")
+        _event(
+            approval_request,
+            EventType.RETRIED,
+            user,
+            _("%(name)s retried applying the change.") % {"name": _name(user)},
+        )
     return execute_approved(request_id, user, http_request)
 
 
@@ -421,13 +526,11 @@ def cancel(request_id, user, reason=""):
     with transaction.atomic():
         approval_request = ApprovalRequest.objects.select_for_update().get(pk=request_id)
         if not can_cancel(user, approval_request):
-            raise ApprovalError("You cannot cancel this request.")
+            raise ApprovalError(_("You cannot cancel this request."))
         approval_request.cancel(by=user)
         approval_request.save()
         by_maker = user.id == approval_request.maker_id
-        message = f"Cancelled by {'the maker' if by_maker else _name(user)}."
-        if reason.strip():
-            message += f" Reason: {reason.strip()}"
+        message = _cancelled_message(user, by_maker, reason.strip())
         _event(approval_request, EventType.CANCELLED, user, message)
         transaction.on_commit(lambda: notify.request_cancelled(approval_request, by_maker=by_maker))
     _bump(approval_request.tenant_id)
@@ -435,14 +538,84 @@ def cancel(request_id, user, reason=""):
     return approval_request
 
 
+def _cancelled_message(user, by_maker, reason):
+    message = _("Cancelled by the maker.") if by_maker else _("Cancelled by %(name)s.") % {"name": _name(user)}
+    if reason:
+        message += " " + _("Reason: %(reason)s") % {"reason": reason}
+    return message
+
+
+def resubmit(request_id, user, payload=None, justification=None):
+    """Send a request that was returned for changes back for approval, as a new round.
+
+    Only the maker resubmits. ``payload`` replaces the proposed change (it must still be for the same item, i.e. have
+    the same lock key); ``justification`` replaces the maker's justification. The item's current state is snapshotted
+    again, and approval restarts from the first stage with a fresh SLA: approvals from the earlier round are
+    discarded, because they approved a different change.
+    """
+    with transaction.atomic():
+        approval_request = ApprovalRequest.objects.select_for_update().get(pk=request_id)
+        if not can_resubmit(user, approval_request):
+            raise ApprovalError(_("Only the maker can resubmit a request that was sent back for changes."))
+        handler = get_handler(approval_request.action_type)
+        changed = payload is not None
+        if changed:
+            _replace_payload(approval_request, handler, to_payload(payload))
+        if justification is not None:
+            approval_request.justification = justification.strip()
+        approval_request.before_snapshot = handler.snapshot_before(approval_request.tenant, approval_request.payload)
+        _ensure_every_stage_has_a_checker(
+            approval_request.tenant, approval_request.action_type, _plans_of(approval_request), user
+        )
+        approval_request.resubmit()
+        approval_request.save()
+        _restart_stages(approval_request, timezone.now())
+        values = {"name": _name(user)}
+        if changed:
+            message = _("%(name)s resubmitted the request with changes.") % values
+        else:
+            message = _("%(name)s resubmitted the request.") % values
+        _event(approval_request, EventType.RESUBMITTED, user, message)
+        transaction.on_commit(lambda: notify.request_submitted(approval_request))
+    _bump(approval_request.tenant_id)
+    _audit(approval_request, "updated", user, after={"status": approval_request.status})
+    return approval_request
+
+
+def _replace_payload(approval_request, handler, payload):
+    if handler.lock_key(payload) != approval_request.lock_key:
+        raise ApprovalError(_("A resubmitted request must still change the same item."))
+    approval_request.payload = payload
+    approval_request.target_label = handler.target_label(payload)[:255]
+
+
+def _plans_of(approval_request):
+    """The request's stages as plans, for checking that each can still be approved."""
+    plans = []
+    for stage in approval_request.stages.prefetch_related("approvers"):
+        regular = [a for a in stage.approvers.all() if not a.is_escalation]
+        plans.append(_StagePlan(regular, stage.require_all, stage.required_approvals))
+    return plans
+
+
+def _restart_stages(approval_request, now):
+    """Clear every stage's progress (and approvers added by escalation), then start the first stage."""
+    ApprovalStageApprover.objects.filter(stage__request=approval_request, is_escalation=True).delete()
+    ApprovalStageApprover.objects.filter(stage__request=approval_request).update(satisfied_at=None, satisfied_by=None)
+    approval_request.stages.update(
+        started_at=None, due_at=None, sla_warned_at=None, escalated_at=None, completed_at=None
+    )
+    _start_stage(approval_request, approval_request.stages.get(order=0), now)
+
+
 def add_comment(request_id, user, text):
     """Add a note to the request's timeline; anyone who may view the request may comment."""
     text = (text or "").strip()
     if not text:
-        raise ApprovalError("Comment cannot be empty.")
+        raise ApprovalError(_("Comment cannot be empty."))
     approval_request = ApprovalRequest.objects.get(pk=request_id)
     if not can_view(user, approval_request):
-        raise ApprovalError("You cannot comment on this request.")
+        raise ApprovalError(_("You cannot comment on this request."))
     _event(approval_request, EventType.COMMENT, user, text)
     return approval_request
 
@@ -455,7 +628,7 @@ def record_view(approval_request, user):
         return
     if approval_request.events.filter(type=EventType.VIEWED, actor=user).exists():
         return
-    _event(approval_request, EventType.VIEWED, user, f"Opened by {_name(user)}.")
+    _event(approval_request, EventType.VIEWED, user, _("Opened by %(name)s.") % {"name": _name(user)})
 
 
 # --- delegation ---------------------------------------------------------------------------------
@@ -465,11 +638,11 @@ def delegate(*, delegator, delegate_user, starts_at, ends_at, action_types=(), r
     """Create a delegation after checking the delegator may approve and both users share a tenant."""
     tenant = get_adapter().tenant_of(delegator)
     if tenant is None:
-        raise ApprovalError("You are not a member of a tenant.")
+        raise ApprovalError(_("You are not a member of a tenant."))
     if not any(has_approve_permission(delegator, t) for t in action_types or _all_action_types()):
-        raise ApprovalError("Only approvers can delegate approvals.")
+        raise ApprovalError(_("Only approvers can delegate approvals."))
     if not is_member_of(delegate_user, tenant.pk):
-        raise ApprovalError("The delegate must be an active member of your organisation.")
+        raise ApprovalError(_("The delegate must be an active member of your organisation."))
     delegation = ApprovalDelegation(
         tenant=tenant,
         delegator=delegator,
@@ -492,7 +665,7 @@ def delegate(*, delegator, delegate_user, starts_at, ends_at, action_types=(), r
 def revoke_delegation(delegation, user):
     """End a delegation now (by its delegator or whoever created it); past decisions made under it are kept."""
     if user.pk not in (delegation.delegator_id, delegation.created_by_id):
-        raise ApprovalError("You cannot end this delegation.")
+        raise ApprovalError(_("You cannot end this delegation."))
     if not delegation.revoked_at:
         delegation.revoked_at = timezone.now()
         delegation.save(update_fields=["revoked_at"])
@@ -589,7 +762,12 @@ def _warn(stage, now):
     stage.sla_warned_at = now
     stage.save(update_fields=["sla_warned_at"])
     percent = int(_elapsed_share(stage, now) * 100)
-    _event(stage.request, EventType.SLA_WARNING, None, f"SLA reminder sent — {percent}% of allowed time elapsed.")
+    _event(
+        stage.request,
+        EventType.SLA_WARNING,
+        None,
+        _("SLA reminder sent — %(percent)s%% of allowed time elapsed.") % {"percent": percent},
+    )
     transaction.on_commit(lambda: notify.sla_warning(stage.request))
 
 
@@ -606,9 +784,9 @@ def _escalate(stage, now):
         ApprovalStageApprover.objects.create(stage=stage, approver_user=user, approver_role=role, is_escalation=True)
         adapter = get_adapter()
         target = adapter.user_label(user) if user else adapter.role_label(role)
-        message = f"SLA breached; escalated to {target}."
+        message = _("SLA breached; escalated to %(target)s.") % {"target": target}
     else:
-        message = "SLA breached; no escalation destination is configured, current approvers reminded."
+        message = _("SLA breached; no escalation destination is configured, current approvers reminded.")
     _event(approval_request, EventType.ESCALATED, None, message, data={"target": target})
     transaction.on_commit(lambda: notify.request_escalated(approval_request, target))
     _bump(approval_request.tenant_id)

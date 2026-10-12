@@ -68,9 +68,15 @@ class Slot:
 
 
 def has_decided(user, approval_request) -> bool:
-    """Whether ``user`` already approved or rejected this request, directly or through a delegate. One person may
-    act once per request, so the same person can't satisfy two steps of an approval flow."""
+    """Whether ``user`` ever decided on this request (in any round), directly or through a delegate."""
     return approval_request.decisions.filter(Q(actor=user) | Q(on_behalf_of=user)).exists()
+
+
+def decided_this_round(user, approval_request) -> bool:
+    """Whether ``user`` already decided in the request's current round. One person may act once per round, so the
+    same person can't satisfy two steps of an approval flow; after a resubmission everyone may decide again."""
+    decisions = approval_request.decisions.filter(submission=approval_request.submission)
+    return decisions.filter(Q(actor=user) | Q(on_behalf_of=user)).exists()
 
 
 def decision_slot(user, approval_request) -> Optional[Slot]:
@@ -102,11 +108,11 @@ def decision_slot(user, approval_request) -> Optional[Slot]:
 
 def _may_take_part(person, approval_request) -> bool:
     """Segregation of duties: a member of the request's tenant who is not its maker (no exception for superusers or
-    staff) and has not already acted on it."""
+    staff) and has not already acted on it in this round."""
     return (
         is_member_of(person, approval_request.tenant_id)
         and person.id != approval_request.maker_id
-        and not has_decided(person, approval_request)
+        and not decided_this_round(person, approval_request)
     )
 
 
@@ -126,10 +132,20 @@ def can_decide(user, approval_request) -> bool:
 
 
 def can_cancel(user, approval_request) -> bool:
-    """The maker may withdraw their own pending request; policy administrators may cancel any."""
-    if approval_request.status != RequestStatus.PENDING or not is_member_of(user, approval_request.tenant_id):
+    """The maker may withdraw their own pending request (or one sent back for changes); policy administrators may
+    cancel any."""
+    if approval_request.status not in RequestStatus.CANCELLABLE or not is_member_of(user, approval_request.tenant_id):
         return False
     return user.id == approval_request.maker_id or can_manage_policies(user)
+
+
+def can_resubmit(user, approval_request) -> bool:
+    """Only the maker resubmits a request that was sent back for changes."""
+    return (
+        approval_request.status == RequestStatus.CHANGES_REQUESTED
+        and user.id == approval_request.maker_id
+        and is_member_of(user, approval_request.tenant_id)
+    )
 
 
 def can_retry(user, approval_request) -> bool:
