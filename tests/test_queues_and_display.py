@@ -126,6 +126,12 @@ class StageProgress(EngineTestCase):
         self.assertEqual((first.number, first.state, first.done, first.required), (1, "done", 1, 1))
         self.assertEqual((second.number, second.state, second.done, second.required), (2, "current", 0, 1))
 
+    def test_the_stage_a_request_is_rejected_at_is_not_shown_as_approved(self):
+        self.policy(PUBLISH, [self.role_reviewer])
+        req = services.decide(self.raise_request().pk, self.checker1, Decision.REJECT, "Wrong figures")
+        (stage,) = queries.stage_progress(req)
+        self.assertEqual((stage.state, stage.done, stage.required), ("rejected", 0, 1))
+
     def test_require_all_stages_need_every_regular_approver(self):
         self.policy(PUBLISH, [self.checker1, self.checker2], workflow=WorkflowType.MULTI, require_all=True)
         req = self.raise_request()

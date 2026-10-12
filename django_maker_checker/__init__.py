@@ -1,3 +1,3 @@
 """Maker-checker approvals engine for Django (headless: models, rules, services and queries)."""
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"

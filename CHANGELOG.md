@@ -2,7 +2,12 @@
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 0.7.0
+
+### Fixed
+
+- `queries.stage_progress` reported the stage a request was rejected at as `done`, so progress strips showed it as
+  approved. It is now `rejected`; `done` means the stage's approvals were all given.
 
 ## 0.6.0
 
