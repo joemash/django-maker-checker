@@ -301,7 +301,8 @@ def _escalation_label(stage):
 @dataclass(frozen=True)
 class StageProgress:
     """One stage for a progress strip: its approvers (and escalation approvers), approvals ``done`` of ``required``,
-    and ``state``."""
+    and ``state``: ``done`` (approved), ``rejected`` (ended by a rejection), ``current`` (awaiting decisions) or
+    ``waiting`` (not started)."""
 
     number: int
     approvers: list
@@ -309,7 +310,7 @@ class StageProgress:
     required: int
     done: int
     require_all: bool
-    state: str  # done | current | waiting
+    state: str  # done | rejected | current | waiting
 
 
 def stage_progress(approval_request):
@@ -331,15 +332,16 @@ def stage_progress(approval_request):
                 required=required,
                 done=done,
                 require_all=stage.require_all,
-                state=_stage_state(approval_request, stage),
+                state=_stage_state(approval_request, stage, done, required),
             )
         )
     return rows
 
 
-def _stage_state(approval_request, stage):
+def _stage_state(approval_request, stage, done, required):
     if stage.completed_at:
-        return "done"
+        # a rejection also completes the stage, without its approvals
+        return "done" if done >= required else "rejected"
     if approval_request.status == RequestStatus.PENDING and stage.order == approval_request.current_stage:
         return "current"
     return "waiting"
