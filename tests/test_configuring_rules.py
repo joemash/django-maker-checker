@@ -18,7 +18,8 @@ from django_maker_checker.constants import WorkflowType
 from django_maker_checker.models import ApprovalPolicy, ApprovalPolicyApprover
 from django_maker_checker.policies import PolicyError, PolicySpec
 from tests.base import EngineTestCase
-from tests.testapp.handlers import EDIT, FLAKY, PUBLISH
+from tests.testapp.handlers import EDIT, FLAKY, MERGE, PUBLISH
+from tests.testapp.models import Document
 
 
 class SavingARule(EngineTestCase):
@@ -157,3 +158,33 @@ class WhichRuleApplies(EngineTestCase):
         self.assertEqual(policy.scope_key, "folder:general")
         with self.assertRaisesMessage(PolicyError, "cannot have per-scope rules"):
             policies.add_scoped_policy(self.tenant, EDIT, "folder:general", by=self.admin)
+
+
+class ActionSpecificConditions(EngineTestCase):
+    """A rule's ``conditions`` hold settings only its action understands (thresholds, scopes...). The action checks
+    them (``ActionHandler.validate_conditions``) and uses them to decide which changes the rule holds (``matches``).
+    """
+
+    def save(self, conditions, **spec):
+        spec.setdefault("approvers", [f"r:{self.role_reviewer.pk}"])
+        return policies.save_policy(
+            policies.policy_for(self.tenant, MERGE), PolicySpec(conditions=conditions, **spec), by=self.admin
+        )
+
+    def test_the_action_rejects_conditions_it_cant_use(self):
+        with self.assertRaisesMessage(PolicyError, "at least 2"):
+            self.save({"min_documents": 1})
+
+    def test_its_errors_are_reported_with_the_rules_other_errors(self):
+        with self.assertRaises(PolicyError) as caught:
+            self.save({"min_documents": "three"}, approvers=[])
+        self.assertEqual(len(caught.exception.messages), 2)
+
+    def test_the_conditions_decide_which_changes_the_rule_holds(self):
+        self.save({"min_documents": 3})
+        second = Document.objects.create(tenant=self.tenant, title="Q3 appendix")
+        third = Document.objects.create(tenant=self.tenant, title="Q3 notes")
+        small = {"document_ids": [self.document.pk, second.pk], "title": "x"}
+        large = {"document_ids": [self.document.pk, second.pk, third.pk], "title": "x"}
+        self.assertFalse(services.requires_approval(self.tenant, MERGE, small))
+        self.assertTrue(services.requires_approval(self.tenant, MERGE, large))

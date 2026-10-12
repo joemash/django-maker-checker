@@ -12,7 +12,7 @@ from django_maker_checker.constants import PolicyChange, WorkflowType
 from django_maker_checker.policies import PolicySpec
 from tests.base import EngineTestCase
 from tests.testapp.adapter import TestAdapter
-from tests.testapp.handlers import PUBLISH
+from tests.testapp.handlers import MERGE, PUBLISH
 
 
 class RuleHistory(EngineTestCase):
@@ -86,3 +86,36 @@ class RuleHistory(EngineTestCase):
         self.assertEqual((status.raised_under, status.current, status.changed_since), (1, 1, False))
         self.save(risk_level="high")
         self.assertTrue(queries.policy_version_status(req).changed_since)
+
+
+class ConditionsInHistory(EngineTestCase):
+    """Actions describe their own conditions for history (``ActionHandler.describe_conditions``), so a change to a
+    threshold or scope reads as a sentence rather than raw data."""
+
+    def save(self, conditions):
+        return policies.save_policy(
+            policies.policy_for(self.tenant, MERGE),
+            PolicySpec(approvers=[f"r:{self.role_reviewer.pk}"], conditions=conditions),
+            by=self.admin,
+        )
+
+    def test_the_action_names_its_conditions(self):
+        self.save({"min_documents": 3})
+        (revision,) = queries.policy_history(self.tenant, MERGE)
+        self.assertEqual(revision.snapshot["Applies to"], "Merges of 3 or more documents")
+
+    def test_changing_them_is_recorded_in_those_words(self):
+        self.save({})
+        self.save({"min_documents": 3})
+        latest = queries.policy_history(self.tenant, MERGE)[0]
+        self.assertIn(
+            {"field": "Applies to", "before": "Every merge", "after": "Merges of 3 or more documents"}, latest.changes
+        )
+
+    def test_actions_without_a_description_list_their_conditions(self):
+        policy = policies.save_policy(
+            policies.policy_for(self.tenant, PUBLISH),
+            PolicySpec(approvers=[f"r:{self.role_reviewer.pk}"], conditions={"min_pages": 2}),
+            by=self.admin,
+        )
+        self.assertEqual(policies.describe(policy)["Conditions"], "min_pages=2")

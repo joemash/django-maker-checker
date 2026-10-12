@@ -26,6 +26,9 @@ Each takes an optional :class:`~django_maker_checker.queries.RequestFilter`:
    )
    rows = queries.awaiting(request.user, filters)
 
+To mark rows in your own lists that are waiting for approval, look them up by item with
+``queries.open_requests_for(tenant, keys)`` (see :ref:`defining_actions:Changes that touch several items`).
+
 ``text`` matches the reference, the item's name, the action's label and the maker's name, email or username, ignoring
 case. ``queries.makers(rows)`` lists the makers for a filter drop-down.
 

@@ -21,7 +21,7 @@ from django_maker_checker.exceptions import ApprovalError
 from django_maker_checker.model_change import ModelChangeHandler
 from django_maker_checker.registry import Scope, all_handlers, diff_rows, get_handler, register_handler
 from tests.base import EngineTestCase
-from tests.testapp.handlers import EDIT, FLAKY, PUBLISH, DocumentEditHandler, publish_document
+from tests.testapp.handlers import EDIT, FLAKY, MERGE, PUBLISH, DocumentEditHandler, publish_document
 from tests.testapp.models import Document
 
 
@@ -36,7 +36,7 @@ class TheRegistry(EngineTestCase):
             get_handler("nope")
 
     def test_handlers_are_listed_by_category_and_label_and_can_be_narrowed_by_scope(self):
-        self.assertEqual([h.action_type for h in all_handlers()], [EDIT, PUBLISH, FLAKY])
+        self.assertEqual([h.action_type for h in all_handlers()], [EDIT, MERGE, PUBLISH, FLAKY])
         self.assertEqual([h.action_type for h in all_handlers(Scope.SCOPED)], [PUBLISH])
 
     def test_one_action_type_cannot_be_defined_in_two_places(self):
