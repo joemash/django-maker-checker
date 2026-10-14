@@ -7,72 +7,110 @@
 [![Docs](https://readthedocs.org/projects/django-maker-checker/badge/?version=latest)](https://django-maker-checker.readthedocs.io)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Documentation: https://django-maker-checker.readthedocs.io**
 
-**Maker-checker (four-eyes) approval of sensitive changes for Django.**
+**Not every change should take effect immediately.**
 
-When a user (the *maker*) performs a guarded action, such as creating a user, changing a credit limit or approving a
-payment run, the change is **not applied**. It becomes an approval request that someone else (a *checker*) must
-approve, under rules each tenant configures. Only then is the change applied, re-checked against the current state of
-the data.
+`django-maker-checker` is an open-source, headless maker-checker (four-eyes) approval engine for Django. It lets you require a second authorized person to approve sensitive changes before they take effect.
 
-It is built for the controls that regulated businesses (banks, fintechs, back offices) are audited on:
+In financial and enterprise systems, a user might need to change a credit limit, create a privileged user, modify account details, or initiate another sensitive operation. You need more than an approval button: you need enforceable separation of duties, configurable policies, controlled execution and an audit trail.
 
-- **The change is held, not just flagged.** The action is captured and applied only on approval. If the data changed
-  meanwhile, the request fails instead of overwriting someone else's edit.
-- **Segregation of duties is enforced.** A maker can never approve their own request, not as a superuser and not
-  through a delegation. One person can't approve two steps. A request can't be raised if nobody else could approve it.
-- **Rules are data, not code.** Each tenant decides which actions need approval, by whom (users or roles), in what
-  workflow, and how fast, without a deploy. Every rule change is versioned with who, when and why.
-- **Nothing gets stuck.** Each step has an SLA with a reminder and escalation to a backup approver.
-- **Everything is on the record.** Every request has a timeline, every decision is stored, and every event is passed to
-  your audit log.
-- **Concurrency-safe.** Decisions lock the row, and only one open request may exist per item.
+`django-maker-checker` provides reusable infrastructure for these controls, so you don't have to build a separate approval mechanism for every Django application.
 
-It is **headless**: it ships models, rules, services and read queries, and no UI. You build the screens your product
-needs on its Python API.
+## Why django-maker-checker?
 
-### How it compares
+- **Changes are held until approval.** A guarded action becomes an approval request rather than taking effect immediately. On approval, the action executes against the current state of the data; if that state has changed, the request fails instead of silently overwriting newer changes.
+- **Separation of duties is enforced.** The maker cannot approve their own request, including through privileged-user or delegation paths. A person cannot approve multiple steps of the same request and a request cannot be raised if no eligible checker exists.
+- **Approval rules are data, not code.** Configure which actions require approval, who can approve them and how approval steps work without deploying code for every policy change. Policy changes are versioned with who made them, when, and why.
+- **Approvals have operational controls.** Configure SLAs, reminders, and escalation to backup approvers so pending requests don't depend entirely on someone remembering to check a queue.
+- **Decisions are auditable.** Requests have a timeline, decisions are recorded, and events can be passed to your audit log.
+- **Concurrent decisions are controlled.** Decisions lock the relevant row and only one open request may exist per item, subject to the database requirements below.
+- **Your UI stays yours.** The library provides models, rules, services, and read queries without imposing a frontend or admin interface.
 
-| | django-maker-checker | Workflow engines (e.g. django-approval-workflow) | Moderation (e.g. django-approval) |
+## Who is it for?
+
+`django-maker-checker` is designed for Django applications where sensitive operations need an independent approval step.
+
+| Use case | Example |
+|---|---|
+| Fintech and financial systems | Changing credit limits or payment instructions |
+| User administration | Creating or deleting privileged users |
+| Accounting and back-office systems | Approving sensitive account or configuration changes |
+| Multi-tenant SaaS | Letting each tenant define its own approval policies |
+| Enterprise applications | Requiring independent authorization for sensitive operations |
+
+These are examples of workflows the library can help implement; each action must still be integrated and configured by the application.
+
+## How it works
+
+The typical lifecycle is straightforward:
+
+1. **Define an action.** Mark a sensitive operation as requiring approval when its policy says so.
+2. **Submit a request.** A maker initiates the action. Instead of applying the change immediately, the library creates an approval request.
+3. **Evaluate the policy.** The request is routed to eligible checkers according to the configured rules.
+4. **Review the request.** A checker can approve, reject, or request changes, depending on the workflow.
+5. **Apply the change.** Once the approval requirements are satisfied, the action executes against the current data state.
+6. **Record the outcome.** The request's decisions and events remain available for auditing.
+
+The approval engine handles the workflow; your application remains responsible for defining the business operation and building the user experience.
+
+## How it compares
+
+| Capability | django-maker-checker | Workflow engines (e.g. django-approval-workflow) | Moderation libraries (e.g. django-approval) |
 |---|---|---|---|
-| What is approved | A pending change, applied on approval | An existing object moving through steps | An edit to a model, kept in a sandbox |
-| Who decides what needs approval | Tenant-configured rules (data) | Code, per flow | Code, per model |
-| Maker can't approve own change | Enforced | — | Privileged users bypass by default |
-| SLA and escalation | Built in | Tracked; you run the timeout loop | — |
-| Multi-tenant | Built in | — | — |
+| Primary purpose | Approval-gated execution of sensitive actions | Orchestrating workflows across steps | Reviewing proposed object edits |
+| Approval policy | Tenant-configurable rules | Typically defined per workflow | Typically defined per model or workflow |
+| Separation of duties | Enforced by the approval engine | Depends on workflow configuration | Depends on implementation and permissions |
+| SLAs and escalation | Built in | May require additional scheduling and escalation logic | Depends on the library |
+| Multi-tenancy | Supported through configurable integration points | Depends on the engine | Depends on the library |
+| User interface | Headless | Depends on the engine | Depends on the library |
 
-If you need rich routing (quorums, org-chart hierarchies, parallel tracks), a workflow engine is the better fit. If you
-need "nobody changes this alone, and we can prove it", this is.
+Choose a broader workflow engine if you need complex orchestration, such as parallel branches, organizational hierarchies, or rich process routing.
 
----
+Choose `django-maker-checker` when your primary requirement is to ensure that **sensitive changes cannot be made by one person acting alone**, with approval rules and decisions that can be audited.
 
 ## Requirements
 
-- Python 3.11+ and Django 5.2, 6.0 or 6.1, with `django.contrib.auth` and `django.contrib.contenttypes`
-- [django-fsm-2](https://github.com/django-commons/django-fsm-2) (installed automatically)
-- **PostgreSQL** is recommended for production. SQLite works for development and tests. On **MySQL / MariaDB** the
-  "one open request per item" guarantee is not enforced, because those databases ignore Django's conditional unique
-  constraints.
-- Optional: Celery, to run the SLA job (`pip install "django-maker-checker[celery]"`). Without it, run a management
-  command from cron.
+- Python 3.11+
+- Django 5.2, 6.0, or 6.1
+- `django.contrib.auth` and `django.contrib.contenttypes`
+- [django-fsm-2](https://github.com/django-commons/django-fsm-2), installed automatically
 
----
+**Database:** PostgreSQL is recommended for production. SQLite works for development and tests. On MySQL/MariaDB, the guarantee that only one open request exists per item is not enforced because these databases ignore Django's conditional unique constraints.
+
+**Background jobs:** Celery is optional. It can run the SLA job; alternatively, schedule the relevant management command with cron.
+
+Install the Celery integration with:
+
+```bash
+pip install "django-maker-checker[celery]"
+```
 
 ## Quick start
 
-A single-tenant project on Django's own users, groups and permissions needs no configuration:
+### 1. Install the package
 
 ```bash
 pip install django-maker-checker
 ```
 
+### 2. Add it to Django
+
+A single-tenant project using Django's built-in users, groups, and permissions requires no additional integration configuration.
+
 ```python
 # settings.py
-INSTALLED_APPS = [..., "django.contrib.auth", "django.contrib.contenttypes", "django_maker_checker"]
+
+INSTALLED_APPS = [
+    # ...
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django_maker_checker",
+]
 ```
 
-Guard the function that makes the change, and register it from your app's `AppConfig.ready()`:
+### 3. Define an approval-gated action
+
+Suppose you want credit-limit changes to require approval.
 
 ```python
 from django_maker_checker.actions import approval_action
@@ -82,61 +120,134 @@ from django_maker_checker.actions import approval_action
     "credit_limit_change",
     label="Credit Limit Change",
     category="Accounts",
-    lock_key=lambda p: f"account:{p['account_id']}",  # at most one open request per account
+    lock_key=lambda p: f"account:{p['account_id']}",
 )
-def change_credit_limit(*, tenant, maker, context, account_id, new_limit):
-    Account.objects.filter(pk=account_id).update(credit_limit=new_limit)
+def change_credit_limit(
+    *,
+    tenant,
+    maker,
+    context,
+    account_id,
+    new_limit,
+):
+    Account.objects.filter(pk=account_id).update(
+        credit_limit=new_limit
+    )
 ```
 
-Run `python manage.py migrate`, which also creates the permission `approvals.approve_credit_limit_change`. Grant it
-to a group, then switch on a rule naming that group:
+The `lock_key` identifies the account associated with the request, allowing the library to prevent multiple open requests for the same item when the database supports the required constraint.
+
+Register the action from your application's `AppConfig.ready()`.
+
+### 4. Configure an approval policy
+
+Run the migrations:
+
+```bash
+python manage.py migrate
+```
+
+The migrations also create the permission `approvals.approve_credit_limit_change`. Grant it to the appropriate group, then configure the policy to use that group.
 
 ```python
 from django_maker_checker import policies, services
 from django_maker_checker.constants import Decision
 from django_maker_checker.models import Tenant
 
+
 policies.save_policy(
-    policies.policy_for(Tenant.default(), "credit_limit_change"),
-    policies.PolicySpec(approvers=[f"r:{risk_officers.pk}"]),
+    policies.policy_for(
+        Tenant.default(),
+        "credit_limit_change",
+    ),
+    policies.PolicySpec(
+        approvers=[f"r:{risk_officers.pk}"],
+    ),
     by=admin_user,
 )
-
-outcome = change_credit_limit(
-    tenant=Tenant.default(), maker=request.user, justification="Annual review", account_id=42, new_limit="5000.00"
-)
-outcome.pending  # True: nothing changed yet, and the risk officers were emailed
-
-services.decide(outcome.approval_request.pk, risk_officer, Decision.APPROVE, "Within appetite")
-# the credit limit changes now, recorded as the maker's change
 ```
 
-A checker can also reject with a reason, or send the request back to the maker for changes. Rules can require one
-approver, any N of several, all of them, or ordered steps, with an SLA and escalation.
+### 5. Submit and approve a request
 
-**Multi-tenant, or your own roles and permissions?** Point `APPROVALS_TENANT_MODEL`, `APPROVALS_ROLE_MODEL` and
-`APPROVALS_ADAPTER` at your models and an adapter class. See
-[Integrating with your project](https://django-maker-checker.readthedocs.io/en/latest/integration.html).
+When a maker initiates the action, the change is held pending approval.
+
+```python
+outcome = change_credit_limit(
+    tenant=Tenant.default(),
+    maker=request.user,
+    justification="Annual review",
+    account_id=42,
+    new_limit="5000.00",
+)
+
+assert outcome.pending  # The credit limit has not changed yet.
+```
+
+An eligible checker can approve the request:
+
+```python
+services.decide(
+    outcome.approval_request.pk,
+    risk_officer,
+    Decision.APPROVE,
+    "Within appetite",
+)
+```
+
+Once the approval requirements are satisfied, the action executes and the resulting change is recorded.
+
+The same workflow supports rejection with a reason and requesting changes from the maker.
+
+**Note:** This example illustrates the core API. Your application must supply its own `Account` model, user and group setup, action registration, and approval interface.
+
+## Configurable approval workflows
+
+Approval policies can express different requirements, including:
+
+- A single approver.
+- Any N of several eligible approvers.
+- Approval from all required approvers.
+- Ordered approval steps.
+- SLAs, reminders and escalation to backup approvers.
+
+Policies are stored as data, allowing authorized administrators to adjust approval requirements without deploying application code for every policy change.
+
+## Integrating with your application
+
+The library is headless by design. It doesn't force you to use a particular frontend, admin interface, or API framework.
+
+For multi-tenant applications or projects with custom roles and permissions, configure the relevant integration points:
+
+- `APPROVALS_TENANT_MODEL`
+- `APPROVALS_ROLE_MODEL`
+- `APPROVALS_ADAPTER`
+
+See the [integration guide](https://django-maker-checker.readthedocs.io/en/latest/integration.html).
 
 ## Documentation
 
-**https://django-maker-checker.readthedocs.io**
+**Full documentation:** https://django-maker-checker.readthedocs.io
 
 - [Quick start](https://django-maker-checker.readthedocs.io/en/latest/quickstart.html)
-- [Concepts](https://django-maker-checker.readthedocs.io/en/latest/concepts.html): the life cycle, who may decide,
-  requesting changes, SLAs, the audit trail
-- [Defining actions](https://django-maker-checker.readthedocs.io/en/latest/defining_actions.html) and
-  [configuring rules](https://django-maker-checker.readthedocs.io/en/latest/rules.html)
+- [Concepts and lifecycle](https://django-maker-checker.readthedocs.io/en/latest/concepts.html)
+- [Defining actions](https://django-maker-checker.readthedocs.io/en/latest/defining_actions.html)
+- [Configuring approval rules](https://django-maker-checker.readthedocs.io/en/latest/rules.html)
 - [Building a UI](https://django-maker-checker.readthedocs.io/en/latest/building_a_ui.html)
-- [Settings](https://django-maker-checker.readthedocs.io/en/latest/settings.html) and the
-  [API reference](https://django-maker-checker.readthedocs.io/en/latest/api.html)
+- [Settings](https://django-maker-checker.readthedocs.io/en/latest/settings.html)
+- [API reference](https://django-maker-checker.readthedocs.io/en/latest/api.html)
+- [Development guide](https://django-maker-checker.readthedocs.io/en/latest/development.html)
 
 ## Contributing
 
-Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[development guide](https://django-maker-checker.readthedocs.io/en/latest/development.html). The tests are written as a specification of the
-library: start with [tests/README.md](tests/README.md).
+Contributions are welcome! Whether you're improving the API, reporting edge cases, adding integrations, or strengthening the test suite, your input is valuable.
+
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+- Follow the [development guide](https://django-maker-checker.readthedocs.io/en/latest/development.html) to set up your environment.
+- Start with [tests/README.md](tests/README.md), which describes the test suite and how it specifies expected library behaviour.
+- Open an issue to discuss substantial changes before submitting a pull request.
+
+Bug reports, use cases, design feedback, and pull requests are all appreciated.
 
 ## License
 
-[MIT](LICENSE)
+Released under the [MIT License](LICENSE).
