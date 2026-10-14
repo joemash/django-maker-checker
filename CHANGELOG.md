@@ -2,6 +2,15 @@
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org).
 
+## 0.8.0
+
+### Changed
+
+- Rewrite the README to clarify the library's purpose, key feature and target use cases.
+- Improve the quick-start guide with a clearer approval workflow example.
+- Add a comparison with workflow engines and moderation libraries.
+- Improve documentation navigation and contribution guidance.
+
 ## 0.7.0
 
 ### Fixed
