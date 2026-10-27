@@ -83,6 +83,13 @@ class RuleValidation(EngineTestCase):
             ({"workflow_type": "committee", "approvers": [f"u:{self.admin.pk}"]}, "Unknown workflow type"),
             ({"approvers": [f"u:{self.admin.pk}"], "risk_level": "extreme"}, "Unknown risk level"),
             ({"workflow_type": WorkflowType.SEQUENTIAL, "approvers": [f"u:{self.admin.pk}", ""]}, "Every step"),
+            (
+                {
+                    "workflow_type": WorkflowType.SEQUENTIAL,
+                    "approvers": [f"u:{self.checker1.pk}", f"u:{self.checker2.pk}", f"u:{self.checker1.pk}"],
+                },
+                "only one step",
+            ),
             ({"workflow_type": WorkflowType.SINGLE, "approvers": []}, "exactly one"),
             ({"workflow_type": WorkflowType.MULTI, "approvers": [f"u:{self.admin.pk}"]}, "at least two"),
             ({"approvers": [f"u:{self.admin.pk}"], "sla_enabled": True, "sla_unit": "hours"}, "at least 1"),
@@ -94,6 +101,11 @@ class RuleValidation(EngineTestCase):
         for spec, message in cases:
             with self.subTest(spec=spec), self.assertRaisesMessage(PolicyError, message):
                 self.save(**spec)
+
+    def test_a_role_may_approve_several_steps_of_an_approval_flow(self):
+        role = f"r:{self.role_reviewer.pk}"
+        policy = self.save(workflow_type=WorkflowType.SEQUENTIAL, approvers=[role, role])
+        self.assertEqual(policy.approvers.count(), 2)
 
     def test_required_approvals_must_fit_a_multi_approver_rule(self):
         two = [f"u:{self.checker1.pk}", f"u:{self.checker2.pk}"]

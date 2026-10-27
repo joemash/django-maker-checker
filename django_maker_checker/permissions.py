@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from django_maker_checker.conf import get_adapter
 from django_maker_checker.constants import RequestStatus
-from django_maker_checker.models import ApprovalDelegation
+from django_maker_checker.models import ApprovalDelegation, same_db
 from django_maker_checker.registry import get_handler
 
 MANAGE_POLICIES = "manage_approval_policies"
@@ -69,13 +69,14 @@ class Slot:
 
 def has_decided(user, approval_request) -> bool:
     """Whether ``user`` ever decided on this request (in any round), directly or through a delegate."""
-    return approval_request.decisions.filter(Q(actor=user) | Q(on_behalf_of=user)).exists()
+    decisions = same_db(approval_request, approval_request.decisions)
+    return decisions.filter(Q(actor=user) | Q(on_behalf_of=user)).exists()
 
 
 def decided_this_round(user, approval_request) -> bool:
     """Whether ``user`` already decided in the request's current round. One person may act once per round, so the
     same person can't satisfy two steps of an approval flow; after a resubmission everyone may decide again."""
-    decisions = approval_request.decisions.filter(submission=approval_request.submission)
+    decisions = same_db(approval_request, approval_request.decisions).filter(submission=approval_request.submission)
     return decisions.filter(Q(actor=user) | Q(on_behalf_of=user)).exists()
 
 
@@ -91,7 +92,7 @@ def decision_slot(user, approval_request) -> Optional[Slot]:
     stage = approval_request.active_stage
     if stage is None:
         return None
-    open_slots = [slot for slot in stage.approvers.all() if not slot.satisfied_at]
+    open_slots = [slot for slot in same_db(stage, stage.approvers).all() if not slot.satisfied_at]
 
     own_slot = _open_slot_for(user, approval_request, open_slots)
     if own_slot is not None:

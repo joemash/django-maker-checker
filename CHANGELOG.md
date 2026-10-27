@@ -2,6 +2,35 @@
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org).
 
+## 0.9.0
+
+### Fixed
+
+- **Decisions under a read replica.** With a database router that sends reads to a replica, an approval was counted
+  before the slot it had just filled ("Approved by … (0 of 1 required approvals)"): single-approver and any-one
+  requests needed one approval too many, all-must-approve requests never completed, and approval flows never moved to
+  their next step (so SLAs escalated requests that had been approved). Rows reached through a request now follow the
+  database it was loaded from (`models.same_db`), so a decision reads its stages, slots and decisions from the write
+  database. Notifications sent after a decision, resubmission, retry and the SLA pass read the same way.
+- An approval flow could name the same user on two steps. One person acts once per round, so such a request could
+  never finish. `save_policy` now refuses it, and submitting under a rule saved earlier with a repeated user is refused
+  with a readable error. A role may still be named on several steps.
+
+### Added
+
+- `services.reassign_approver(user, by=None)` hands a departing approver's unfilled slots on open requests to the
+  approver the rule now names in the same position, or else to the request's escalation backup. Call it when a user is
+  deactivated or removed. Slots nobody can take over are left in place and noted on the timeline. New event type
+  `reassigned`; whoever takes over a slot on the active step is notified (notice kind `requested`).
+- `APPROVALS_COMMENT_MAX_LENGTH` (default 2000): decision notes, timeline comments and cancellation reasons longer
+  than this are refused.
+
+### Upgrading
+
+Run `migrate` (`approvals.0005`, which only adds the `reassigned` event type). Hosts that let users enter decision
+notes longer than 2000 characters should set `APPROVALS_COMMENT_MAX_LENGTH`, and give their text boxes the same
+`maxlength`.
+
 ## 0.8.0
 
 ### Changed

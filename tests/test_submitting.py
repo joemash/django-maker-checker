@@ -94,6 +94,11 @@ class SubmissionIsRefused(EngineTestCase):
         with self.assertRaisesMessage(ApprovalError, "for step 2"):
             self.publish()
 
+    def test_when_an_older_approval_flow_names_the_same_person_on_two_steps(self):
+        self.policy(PUBLISH, [self.checker1, self.checker2, self.checker1], workflow=WorkflowType.SEQUENTIAL)
+        with self.assertRaisesMessage(ApprovalError, "named on more than one step"):
+            self.publish()
+
     def test_when_fewer_people_than_the_required_approvals_could_approve(self):
         self.policy(PUBLISH, [self.maker, self.checker1], workflow=WorkflowType.MULTI, require_all=True)
         with self.assertRaisesMessage(ApprovalError, "2 approvals are needed, but only 1 eligible approver"):

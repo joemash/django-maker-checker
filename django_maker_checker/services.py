@@ -13,7 +13,7 @@ from typing import Optional
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, router, transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -21,7 +21,7 @@ from django.utils.translation import ngettext
 
 from django_maker_checker import audit, notify
 from django_maker_checker.adapter import AuditRecord
-from django_maker_checker.conf import counts_cache, get_adapter, role_model_name
+from django_maker_checker.conf import comment_max_length, counts_cache, get_adapter, role_model_name
 from django_maker_checker.constants import Decision, EventType, RequestStatus, SlaState, WorkflowType
 from django_maker_checker.exceptions import ApprovalError
 from django_maker_checker.models import (
@@ -34,6 +34,7 @@ from django_maker_checker.models import (
     ApprovalStage,
     ApprovalStageApprover,
     required_approvals_count,
+    same_db,
 )
 from django_maker_checker.permissions import (
     can_cancel,
@@ -185,7 +186,17 @@ def submit(action_type, *, tenant, maker, payload, justification="", policy=None
 
 def _ensure_every_stage_has_a_checker(tenant, action_type, layout, maker):
     """Each stage needs as many eligible people other than the maker as it needs approvals, otherwise the request
-    could never complete."""
+    could never complete. For the same reason no user may be named on two stages: one person acts once per round
+    (rules saved before ``save_policy`` refused this can still name someone twice)."""
+    if len(layout) > 1:
+        named = [slot.approver_user_id for plan in layout for slot in plan.slots if slot.approver_user_id]
+        if len(named) != len(set(named)):
+            raise ApprovalError(
+                _(
+                    "The same person is named on more than one step of this approval flow, so it could never be "
+                    "completed. Ask an administrator to update the approval configuration."
+                )
+            )
     for number, plan in enumerate(layout, start=1):
         eligible = len(eligible_checkers(tenant, action_type, plan.slots, exclude_user_ids=[maker.id]))
         if eligible >= plan.required:
@@ -274,7 +285,8 @@ def _release_locks(approval_request):
 
 def _items_held_error(approval_request, keys):
     holder = (
-        ApprovalLock.objects.filter(tenant_id=approval_request.tenant_id, key__in=keys)
+        _primary(ApprovalLock)
+        .filter(tenant_id=approval_request.tenant_id, key__in=keys)
         .exclude(request=approval_request)
         .select_related("request")
         .first()
@@ -289,9 +301,11 @@ def _items_held_error(approval_request, keys):
 
 def _already_open_error(tenant, action_type, lock_key):
     """The error for a duplicate submission, naming the open request that blocks it."""
-    existing = ApprovalRequest.objects.filter(
-        tenant=tenant, action_type=action_type, lock_key=lock_key, status__in=RequestStatus.OPEN
-    ).first()
+    existing = (
+        _primary(ApprovalRequest)
+        .filter(tenant=tenant, action_type=action_type, lock_key=lock_key, status__in=RequestStatus.OPEN)
+        .first()
+    )
     if existing:
         return ApprovalError(
             _("There is already an open approval request (%(reference)s) for this item.")
@@ -394,15 +408,25 @@ def decide(request_id, user, decision, comment="", http_request=None):
 
 
 def _checked_comment(decision, comment):
-    """The decision's comment, stripped; refuses unknown decisions, and rejections or change requests without one."""
+    """The decision's comment, stripped; refuses unknown decisions, comments over the length limit, and rejections or
+    change requests without one."""
     if decision not in dict(Decision.CHOICES):
         raise ApprovalError(_("Unknown decision."))
-    comment = (comment or "").strip()
+    comment = _checked_length(comment)
     if decision == Decision.REJECT and not comment:
         raise ApprovalError(_("A reason is required to reject a request."))
     if decision == Decision.REQUEST_CHANGES and not comment:
         raise ApprovalError(_("Say what needs to change."))
     return comment
+
+
+def _checked_length(text):
+    """``text`` stripped, refused when longer than ``APPROVALS_COMMENT_MAX_LENGTH``."""
+    text = (text or "").strip()
+    limit = comment_max_length()
+    if len(text) > limit:
+        raise ApprovalError(_("This note is too long: use at most %(limit)s characters.") % {"limit": limit})
+    return text
 
 
 def _who(user, slot):
@@ -458,7 +482,7 @@ def _approve(approval_request, stage, slot, user, comment):
 
     stage.completed_at = now
     stage.save(update_fields=["completed_at"])
-    next_stage = approval_request.stages.filter(order=stage.order + 1).first()
+    next_stage = same_db(approval_request, approval_request.stages).filter(order=stage.order + 1).first()
     if next_stage is not None:
         _start_stage(approval_request, next_stage, now)
         message = _("Step %(step)s approved by %(who)s; routed to step %(next)s.") % {
@@ -490,7 +514,7 @@ def stage_progress_counts(stage):
 
     Escalation slots are excluded: they complete a stage on their own and aren't part of "N of M approvals".
     """
-    regular = [a for a in stage.approvers.all() if not a.is_escalation]
+    regular = [a for a in same_db(stage, stage.approvers).all() if not a.is_escalation]
     return sum(1 for a in regular if a.satisfied_at), stage.required_count(regular)
 
 
@@ -511,7 +535,7 @@ def execute_approved(request_id, actor, http_request=None):
     transaction rolls back and a fresh one records FAILED with the error; ``ApprovalError`` messages are expected
     and aren't logged as crashes.
     """
-    approval_request = ApprovalRequest.objects.get(pk=request_id)
+    approval_request = _primary(ApprovalRequest).get(pk=request_id)
     handler = get_handler(approval_request.action_type)
     try:
         with transaction.atomic():
@@ -571,6 +595,7 @@ def retry(request_id, user, http_request=None):
 
 def cancel(request_id, user, reason=""):
     """Withdraw a pending request: by its maker, or by an administrator (the maker is then told who cancelled it)."""
+    reason = _checked_length(reason)
     with transaction.atomic():
         approval_request = ApprovalRequest.objects.select_for_update().get(pk=request_id)
         if not can_cancel(user, approval_request):
@@ -579,7 +604,7 @@ def cancel(request_id, user, reason=""):
         approval_request.save()
         _release_locks(approval_request)
         by_maker = user.id == approval_request.maker_id
-        message = _cancelled_message(user, by_maker, reason.strip())
+        message = _cancelled_message(user, by_maker, reason)
         _event(approval_request, EventType.CANCELLED, user, message)
         transaction.on_commit(lambda: notify.request_cancelled(approval_request, by_maker=by_maker))
     _bump(approval_request.tenant_id)
@@ -643,8 +668,8 @@ def _replace_payload(approval_request, handler, payload):
 def _plans_of(approval_request):
     """The request's stages as plans, for checking that each can still be approved."""
     plans = []
-    for stage in approval_request.stages.prefetch_related("approvers"):
-        regular = [a for a in stage.approvers.all() if not a.is_escalation]
+    for stage in same_db(approval_request, approval_request.stages).all():
+        regular = [a for a in same_db(stage, stage.approvers).all() if not a.is_escalation]
         plans.append(_StagePlan(regular, stage.require_all, stage.required_approvals))
     return plans
 
@@ -656,12 +681,12 @@ def _restart_stages(approval_request, now):
     approval_request.stages.update(
         started_at=None, due_at=None, sla_warned_at=None, escalated_at=None, completed_at=None
     )
-    _start_stage(approval_request, approval_request.stages.get(order=0), now)
+    _start_stage(approval_request, same_db(approval_request, approval_request.stages).get(order=0), now)
 
 
 def add_comment(request_id, user, text):
     """Add a note to the request's timeline; anyone who may view the request may comment."""
-    text = (text or "").strip()
+    text = _checked_length(text)
     if not text:
         raise ApprovalError(_("Comment cannot be empty."))
     approval_request = ApprovalRequest.objects.get(pk=request_id)
@@ -680,6 +705,105 @@ def record_view(approval_request, user):
     if approval_request.events.filter(type=EventType.VIEWED, actor=user).exists():
         return
     _event(approval_request, EventType.VIEWED, user, _("Opened by %(name)s.") % {"name": _name(user)})
+
+
+# --- reassignment -------------------------------------------------------------------------------
+
+
+def reassign_approver(user, *, by=None):
+    """Hand ``user``'s unfilled approver slots on open requests to someone who can still act on them.
+
+    Call it when ``user`` can no longer approve, e.g. from the host's deactivate or remove-user flow once they have
+    lost access. Requests keep the approvers they were raised with, so without this a step naming someone who left
+    could never be approved.
+
+    Each unfilled slot naming ``user`` directly, on a stage that hasn't finished, goes to the approver the rule names
+    in the same position now, or else to the request's escalation backup. Role slots are left alone: the role's other
+    members still fill them. A replacement must be able to approve, must not be the maker, and must not already be
+    named on the request, since one person acts once per round. A slot with no such replacement is left as it is and
+    the timeline says so, for an administrator to cancel the request or fix the rule. Whoever takes over a slot on the
+    active stage is notified on commit.
+
+    Returns ``{"reassigned": n, "unassigned": n}``.
+    """
+    summary = {"reassigned": 0, "unassigned": 0}
+    slots = _primary(ApprovalStageApprover).filter(
+        approver_user=user,
+        is_escalation=False,
+        satisfied_at__isnull=True,
+        stage__completed_at__isnull=True,
+        stage__request__status__in=RequestStatus.CANCELLABLE,
+    )
+    for request_id, slot_id in list(slots.values_list("stage__request_id", "id")):
+        with transaction.atomic():
+            approval_request = ApprovalRequest.objects.select_for_update().get(pk=request_id)
+            slot = slots.select_related("stage").filter(pk=slot_id).first()  # re-checked now the request is locked
+            if slot is None or approval_request.status not in RequestStatus.CANCELLABLE:
+                continue
+            outcome = _reassign_slot(approval_request, slot, user, by)
+        summary[outcome] += 1
+        _bump(approval_request.tenant_id)
+        _audit(approval_request, "updated", by, after={"reassigned_from": user.pk, "outcome": outcome})
+    return summary
+
+
+def _reassign_slot(approval_request, slot, leaving, by):
+    """Give ``slot`` to its replacement, or log that there is none. Returns "reassigned" or "unassigned"."""
+    values = {"name": _name(leaving), "step": slot.stage.order + 1}
+    replacement = _replacement_for(approval_request, slot, leaving)
+    if replacement is None:
+        message = _(
+            "%(name)s can no longer approve step %(step)s and no replacement approver is configured: cancel the "
+            "request or update the rule."
+        )
+        _event(approval_request, EventType.REASSIGNED, by, message % values)
+        return "unassigned"
+    slot.approver_user_id, slot.approver_role_id = replacement.approver_user_id, replacement.approver_role_id
+    slot.save(update_fields=["approver_user", "approver_role"])
+    values["target"] = replacement.approver_label
+    message = _("%(name)s can no longer approve step %(step)s; reassigned to %(target)s.") % values
+    _event(approval_request, EventType.REASSIGNED, by, message)
+    if approval_request.status == RequestStatus.PENDING and slot.stage.order == approval_request.current_stage:
+        transaction.on_commit(lambda: notify.approver_assigned(approval_request, slot))
+    return "reassigned"
+
+
+def _replacement_for(approval_request, slot, leaving):
+    """The approver to take over ``slot``: the rule's approver at the same position now, else the request's
+    escalation backup, whichever can act first (see ``reassign_approver``); None when neither can."""
+    others = _primary(ApprovalStageApprover).filter(stage__request=approval_request).exclude(pk=slot.pk)
+    excluded = {leaving.pk, approval_request.maker_id}
+    excluded |= {user_id for user_id in others.values_list("approver_user_id", flat=True) if user_id}
+    for candidate in (_rule_approver_at(approval_request, slot), _escalation_backup(approval_request)):
+        if candidate is None or candidate.approver_user_id in excluded:
+            continue
+        exclude_user_ids = [leaving.pk, approval_request.maker_id]
+        if eligible_checkers(approval_request.tenant, approval_request.action_type, [candidate], exclude_user_ids):
+            return candidate
+    return None
+
+
+def _rule_approver_at(approval_request, slot):
+    """The approver the request's rule now names at ``slot``'s position, while the rule keeps the workflow the
+    request was raised under (positions mean different things in different workflows)."""
+    policy = approval_request.policy
+    if policy is None or policy.workflow_type != approval_request.policy_snapshot.get("workflow_type"):
+        return None
+    regular = _primary(ApprovalStageApprover).filter(stage__request=approval_request, is_escalation=False)
+    position = (
+        regular.filter(stage__order__lt=slot.stage.order).count()
+        + regular.filter(stage=slot.stage, id__lt=slot.id).count()
+    )
+    approvers = policy.ordered_approvers()
+    return approvers[position] if position < len(approvers) else None
+
+
+def _escalation_backup(approval_request):
+    """The escalation backup from the request's snapshot, as an unsaved slot, or None."""
+    user, role = parse_token(approval_request.policy_snapshot.get("escalation"))
+    if user is None and role is None:
+        return None
+    return ApprovalStageApprover(approver_user=user, approver_role=role)
 
 
 # --- delegation ---------------------------------------------------------------------------------
@@ -764,12 +888,16 @@ def _tenant_enabled(approval_request, answers):
 def _sla_candidate_ids():
     """Started, unfinished stages of pending requests that still owe a reminder or an escalation."""
     still_due_an_action = Q(escalated_at__isnull=True) | Q(sla_warned_at__isnull=True)
-    stages = ApprovalStage.objects.filter(
-        request__status=RequestStatus.PENDING,
-        completed_at__isnull=True,
-        started_at__isnull=False,
-        due_at__isnull=False,
-    ).filter(still_due_an_action)
+    stages = (
+        _primary(ApprovalStage)
+        .filter(
+            request__status=RequestStatus.PENDING,
+            completed_at__isnull=True,
+            started_at__isnull=False,
+            due_at__isnull=False,
+        )
+        .filter(still_due_an_action)
+    )
     return list(stages.values_list("id", flat=True))
 
 
@@ -863,6 +991,12 @@ def _bump(tenant_id):
 
 
 # --- internals ----------------------------------------------------------------------------------
+
+
+def _primary(model):
+    """``model``'s rows on the database writes go to, for reading rows that may only just have been written (which a
+    replica may not have yet)."""
+    return model._default_manager.db_manager(router.db_for_write(model))
 
 
 def _name(user):

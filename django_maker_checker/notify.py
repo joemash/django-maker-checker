@@ -13,7 +13,7 @@ from django.utils.translation import gettext as _
 from django_maker_checker.adapter import Notice
 from django_maker_checker.conf import get_adapter
 from django_maker_checker.constants import EventType, RequestStatus
-from django_maker_checker.models import ApprovalDelegation, ApprovalEvent
+from django_maker_checker.models import ApprovalDelegation, ApprovalEvent, same_db
 from django_maker_checker.permissions import eligible_checkers
 from django_maker_checker.registry import get_handler
 
@@ -35,7 +35,7 @@ def current_checkers(approval_request):
     checkers = eligible_checkers(
         approval_request.tenant,
         approval_request.action_type,
-        list(stage.approvers.all()),
+        list(same_db(stage, stage.approvers).all()),
         exclude_user_ids=[approval_request.maker_id],
     )
     delegate_ids = _current_delegate_ids(approval_request, checkers) - {checker.pk for checker in checkers}
@@ -102,7 +102,7 @@ def _deliver(approval_request, kind, recipients, title, text, severity="info", r
 def request_submitted(approval_request):
     """Tell the active stage's checkers (and their delegates) that a request awaits them. Also used when a request
     moves to its next stage."""
-    approval_request.refresh_from_db()
+    approval_request.refresh_from_db(using=approval_request._state.db)
     maker = get_adapter().user_label(approval_request.maker)
     _deliver(
         approval_request,
@@ -114,9 +114,23 @@ def request_submitted(approval_request):
     )
 
 
+def approver_assigned(approval_request, slot):
+    """Tell whoever now fills ``slot`` (after ``services.reassign_approver``) that the request awaits them."""
+    _deliver(
+        approval_request,
+        REQUESTED,
+        eligible_checkers(
+            approval_request.tenant, approval_request.action_type, [slot], exclude_user_ids=[approval_request.maker_id]
+        ),
+        _("Approval required"),
+        _("%(subject)s was reassigned to you for approval.") % {"subject": subject(approval_request)},
+        record_as=_("Reassignment notice"),
+    )
+
+
 def request_decided(approval_request):
     """Tell the maker the outcome: rejected (with the reason), applied, or approved but failed to apply."""
-    approval_request.refresh_from_db()
+    approval_request.refresh_from_db(using=approval_request._state.db)
     status = approval_request.status
     values = {
         "subject": subject(approval_request),
@@ -158,12 +172,12 @@ def request_cancelled(approval_request, by_maker=True):
     The request is no longer pending, so the stage is looked up by ``current_stage`` instead of ``active_stage``.
     """
     users = [] if by_maker else [approval_request.maker]
-    stage = approval_request.stages.filter(order=approval_request.current_stage).first()
+    stage = same_db(approval_request, approval_request.stages).filter(order=approval_request.current_stage).first()
     if stage:
         users += eligible_checkers(
             approval_request.tenant,
             approval_request.action_type,
-            list(stage.approvers.all()),
+            list(same_db(stage, stage.approvers).all()),
             exclude_user_ids=[approval_request.maker_id],
         )
     _deliver(

@@ -228,3 +228,20 @@ Anything on the timeline                  ``post_save`` on ``ApprovalEvent`` (``
 Doing something when your action is       Your handler's ``execute()``.
 approved
 ========================================  ===================================================================
+
+When an approver leaves
+-----------------------
+
+Requests keep the approvers they were raised with, so a step that names someone who has been deactivated can't be
+approved. Call ``services.reassign_approver(user, by=admin)`` from your deactivate or remove-user flow, after the user
+has lost access. Each of their unfilled slots goes to the approver the rule names in the same position now, or else to
+the request's escalation backup; a slot nobody can take over stays as it is and the request's timeline says so.
+
+Read replicas
+-------------
+
+A database router may send reads to a replica. Decisions read what they have just written inside one transaction, so
+the engine reads a request's stages, slots and decisions from the database the request was loaded from (the write
+database, for a request locked for a decision) instead of asking the router. Your own handlers' ``validate()`` and
+``execute()`` run inside that transaction too: if they read data that the change, or a request raised moments ago,
+has just written, read it from the write database (``Model.objects.db_manager(router.db_for_write(Model))``).
