@@ -2,6 +2,15 @@
 
 All notable changes are documented here. The project follows [Semantic Versioning](https://semver.org).
 
+## 0.9.1
+
+### Fixed
+
+- `services.reassign_approver` handed slots to a request's escalation backup even when the request had no SLA. A
+  rule keeps its last backup when its SLA is switched off (so switching it back on restores it), and the rule's history
+  shows no backup while the SLA is off, so a request raised then could be reassigned to someone the rule no longer
+  named. The backup is now used only when the request has an SLA; otherwise the slot stays and the timeline says so.
+
 ## 0.9.0
 
 ### Fixed

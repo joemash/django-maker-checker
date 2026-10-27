@@ -718,11 +718,11 @@ def reassign_approver(user, *, by=None):
     could never be approved.
 
     Each unfilled slot naming ``user`` directly, on a stage that hasn't finished, goes to the approver the rule names
-    in the same position now, or else to the request's escalation backup. Role slots are left alone: the role's other
-    members still fill them. A replacement must be able to approve, must not be the maker, and must not already be
-    named on the request, since one person acts once per round. A slot with no such replacement is left as it is and
-    the timeline says so, for an administrator to cancel the request or fix the rule. Whoever takes over a slot on the
-    active stage is notified on commit.
+    in the same position now, or else to the request's escalation backup (when the request has an SLA). Role slots
+    are left alone: the role's other members still fill them. A replacement must be able to approve, must not be the
+    maker, and must not already be named on the request, since one person acts once per round. A slot with no such
+    replacement is left as it is and the timeline says so, for an administrator to cancel the request or fix the rule.
+    Whoever takes over a slot on the active stage is notified on commit.
 
     Returns ``{"reassigned": n, "unassigned": n}``.
     """
@@ -799,8 +799,12 @@ def _rule_approver_at(approval_request, slot):
 
 
 def _escalation_backup(approval_request):
-    """The escalation backup from the request's snapshot, as an unsaved slot, or None."""
-    user, role = parse_token(approval_request.policy_snapshot.get("escalation"))
+    """The escalation backup from the request's snapshot, as an unsaved slot, or None. A backup only counts while the
+    request's SLA is on, as in the rule's history: a rule keeps its last backup when its SLA is switched off."""
+    snapshot = approval_request.policy_snapshot
+    if not snapshot.get("sla_minutes"):
+        return None
+    user, role = parse_token(snapshot.get("escalation"))
     if user is None and role is None:
         return None
     return ApprovalStageApprover(approver_user=user, approver_role=role)
