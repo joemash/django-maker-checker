@@ -11,22 +11,22 @@
 | django\_maker\_checker/apps.py                                        |       13 |        0 |    100% |           |
 | django\_maker\_checker/audit.py                                       |        8 |        2 |     75% |     16-17 |
 | django\_maker\_checker/auth\_adapter.py                               |       47 |        2 |     96% |    58, 73 |
-| django\_maker\_checker/conf.py                                        |       37 |        1 |     97% |        45 |
-| django\_maker\_checker/constants.py                                   |       67 |        0 |    100% |           |
+| django\_maker\_checker/conf.py                                        |       39 |        1 |     97% |        46 |
+| django\_maker\_checker/constants.py                                   |       68 |        0 |    100% |           |
 | django\_maker\_checker/exceptions.py                                  |        6 |        2 |     67% |     19-20 |
 | django\_maker\_checker/management/\_\_init\_\_.py                     |        0 |        0 |    100% |           |
 | django\_maker\_checker/management/commands/\_\_init\_\_.py            |        0 |        0 |    100% |           |
 | django\_maker\_checker/management/commands/process\_approval\_slas.py |        7 |        0 |    100% |           |
 | django\_maker\_checker/model\_change.py                               |       62 |        0 |    100% |           |
-| django\_maker\_checker/models.py                                      |      267 |       13 |     95% |54, 73-74, 135, 139, 217, 274, 309, 318, 349, 375, 409, 492 |
-| django\_maker\_checker/notify.py                                      |       82 |        2 |     98% |  136, 183 |
-| django\_maker\_checker/permissions.py                                 |      105 |        6 |     94% |25, 49, 93, 102, 167, 180 |
-| django\_maker\_checker/policies.py                                    |      209 |        8 |     96% |88, 311-313, 321-322, 396-397 |
+| django\_maker\_checker/models.py                                      |      270 |       13 |     95% |66, 85-86, 147, 151, 229, 286, 321, 330, 361, 387, 421, 504 |
+| django\_maker\_checker/notify.py                                      |       84 |        2 |     98% |  150, 197 |
+| django\_maker\_checker/permissions.py                                 |      106 |        6 |     94% |25, 49, 94, 103, 168, 181 |
+| django\_maker\_checker/policies.py                                    |      214 |        8 |     96% |88, 321-323, 331-332, 406-407 |
 | django\_maker\_checker/queries.py                                     |      179 |       15 |     92% |73, 94-95, 115, 130, 142, 170, 177, 228, 231, 237-238, 242, 347, 354 |
 | django\_maker\_checker/registry.py                                    |       87 |        7 |     92% |75, 99, 110, 131, 137, 182, 192 |
-| django\_maker\_checker/services.py                                    |      484 |       13 |     97% |99-101, 217, 287, 300, 399, 419-420, 520, 692, 785, 788 |
+| django\_maker\_checker/services.py                                    |      550 |       15 |     97% |100-102, 228, 299, 314, 414, 443-444, 544, 742, 791, 816, 913, 916 |
 | django\_maker\_checker/tasks.py                                       |       10 |        1 |     90% |        21 |
-| **TOTAL**                                                             | **1831** |  **122** | **93%** |           |
+| **TOTAL**                                                             | **1911** |  **124** | **94%** |           |
 
 
 ## Setup coverage badge
