@@ -31,6 +31,10 @@ permissions (see :ref:`integration:The built-in adapter`).
    * - ``APPROVALS_REFERENCE_PREFIX``
      - ``"REQ"``
      - Prefix of request references, as in ``REQ-2610-00042``.
+   * - ``APPROVALS_COMMENT_MAX_LENGTH``
+     - ``2000``
+     - Longest decision note (approval comment, rejection reason, requested changes), timeline comment or
+       cancellation reason, in characters. Give your text boxes the same ``maxlength``.
 
 The tenant and role models are referenced by the engine's migrations, like ``AUTH_USER_MODEL``: set them before the
 first ``migrate`` and don't change them afterwards.

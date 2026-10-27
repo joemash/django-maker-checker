@@ -11,6 +11,8 @@ Life cycle:  PENDING ──approve──▶ APPROVED ──execute──▶ EXEC
                 └──cancel──▶ CANCELLED
 """
 
+from django.test import override_settings
+
 from django_maker_checker import services
 from django_maker_checker.constants import Decision, EventType, RequestStatus, SlaUnit, WorkflowType
 from django_maker_checker.exceptions import ApprovalError
@@ -52,6 +54,16 @@ class Rejecting(EngineTestCase):
     def test_a_rejection_needs_a_reason(self):
         with self.assertRaisesMessage(ApprovalError, "reason is required"):
             services.decide(self.req.pk, self.checker1, Decision.REJECT, "  ")
+
+    @override_settings(APPROVALS_COMMENT_MAX_LENGTH=20)
+    def test_notes_longer_than_the_limit_are_refused_and_nothing_is_recorded(self):
+        for decision in (Decision.REJECT, Decision.REQUEST_CHANGES, Decision.APPROVE):
+            with self.subTest(decision=decision), self.assertRaisesMessage(ApprovalError, "at most 20 characters"):
+                services.decide(self.req.pk, self.checker1, decision, "x" * 21)
+        self.assertFalse(self.req.decisions.exists())
+        self.assertEqual(
+            services.decide(self.req.pk, self.checker1, Decision.REJECT, "x" * 20).rejection_reason, "x" * 20
+        )
 
     def test_rejecting_ends_the_request_and_frees_the_item_for_a_new_request(self):
         req = services.decide(self.req.pk, self.checker1, Decision.REJECT, "Wrong figures")

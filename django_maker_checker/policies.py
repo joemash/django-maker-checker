@@ -130,7 +130,8 @@ def _condition_errors(policy, spec):
 
 
 def _approver_tokens(spec):
-    """Approval flows keep every step as given (order matters, blanks are errors). Other workflows ignore blanks and
+    """Approval flows keep every step as given (order matters; blanks and repeated users are errors). Other workflows
+    ignore blanks and
     repeated users; Multiple Approvers keeps a repeated role, which asks for that many different members of it
     ("two people from Finance"), since one person can only fill one slot."""
     if spec.workflow_type == WorkflowType.SEQUENTIAL:
@@ -159,11 +160,20 @@ def _choice_errors(spec):
 def _approver_errors(spec, tokens):
     if spec.workflow_type == WorkflowType.SEQUENTIAL and (not tokens or not all(tokens)):
         yield _("Every step of the approval flow needs an approver.")
+    if spec.workflow_type == WorkflowType.SEQUENTIAL and _repeats_a_user(tokens):
+        yield _("A person can approve only one step of an approval flow: choose someone else for the other steps.")
     if spec.workflow_type == WorkflowType.SINGLE and len(tokens) != 1:
         yield _("Select exactly one approver.")
     if spec.workflow_type == WorkflowType.MULTI and len(tokens) < 2:
         yield _("Select at least two approvers, or use Single Approver.")
     yield from _required_approvals_errors(spec, tokens)
+
+
+def _repeats_a_user(tokens):
+    """Whether a user is named more than once. One person acts once per round, so a flow naming them on two steps
+    could never finish; a role on two steps is fine, since different members fill them."""
+    users = [token for token in tokens if token.startswith("u:")]
+    return len(users) != len(set(users))
 
 
 def _required_approvals_errors(spec, tokens):

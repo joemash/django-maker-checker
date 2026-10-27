@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-12 17:52+0300\n"
+"POT-Creation-Date: 2026-10-27 17:52+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -112,6 +112,9 @@ msgid "Executed"
 msgstr ""
 
 msgid "Retried"
+msgstr ""
+
+msgid "Reassigned"
 msgstr ""
 
 msgid "On Track"
@@ -251,6 +254,13 @@ msgstr ""
 msgid "Approval notification"
 msgstr ""
 
+#, python-format
+msgid "%(subject)s was reassigned to you for approval."
+msgstr ""
+
+msgid "Reassignment notice"
+msgstr ""
+
 msgid "Request rejected"
 msgstr ""
 
@@ -344,6 +354,11 @@ msgstr ""
 msgid "Every step of the approval flow needs an approver."
 msgstr ""
 
+msgid ""
+"A person can approve only one step of an approval flow: choose someone else "
+"for the other steps."
+msgstr ""
+
 msgid "Select exactly one approver."
 msgstr ""
 
@@ -412,6 +427,12 @@ msgid "Approvals are switched off for this organisation."
 msgstr ""
 
 msgid "No approval policy applies to this action."
+msgstr ""
+
+msgid ""
+"The same person is named on more than one step of this approval flow, so it "
+"could never be completed. Ask an administrator to update the approval "
+"configuration."
 msgstr ""
 
 #, python-format
@@ -490,6 +511,10 @@ msgid "Unknown decision."
 msgstr ""
 
 #, python-format
+msgid "This note is too long: use at most %(limit)s characters."
+msgstr ""
+
+#, python-format
 msgid "%(actor)s on behalf of %(delegator)s"
 msgstr ""
 
@@ -563,6 +588,16 @@ msgstr ""
 
 #, python-format
 msgid "Opened by %(name)s."
+msgstr ""
+
+#, python-format
+msgid ""
+"%(name)s can no longer approve step %(step)s and no replacement approver is "
+"configured: cancel the request or update the rule."
+msgstr ""
+
+#, python-format
+msgid "%(name)s can no longer approve step %(step)s; reassigned to %(target)s."
 msgstr ""
 
 msgid "You are not a member of a tenant."

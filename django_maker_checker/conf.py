@@ -7,6 +7,7 @@
 ``APPROVALS_CACHE_TIMEOUT`` seconds the per-user pending count is cached (default 60)
 ``APPROVALS_CACHE_ALIAS``   cache used for pending counts (default "default")
 ``APPROVALS_REFERENCE_PREFIX`` prefix of request references, as in ``REQ-2610-00042`` (default "REQ")
+``APPROVALS_COMMENT_MAX_LENGTH`` longest decision note, comment or cancellation reason, in characters (default 2000)
 
 The tenant and role defaults are written onto ``settings`` when this module is first imported (the app config imports
 it), because models and migrations read ``settings.APPROVALS_TENANT_MODEL`` / ``APPROVALS_ROLE_MODEL`` directly, as
@@ -71,6 +72,10 @@ def counts_cache():
 
 def reference_prefix():
     return getattr(settings, "APPROVALS_REFERENCE_PREFIX", "REQ")
+
+
+def comment_max_length():
+    return getattr(settings, "APPROVALS_COMMENT_MAX_LENGTH", 2000)
 
 
 # Adapters are stateless, so one instance per dotted path is reused for the life of the process.

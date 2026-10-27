@@ -87,6 +87,7 @@ class EventType:
     EXECUTED = "executed"
     FAILED = "failed"
     RETRIED = "retried"
+    REASSIGNED = "reassigned"
 
     CHOICES = [
         (CREATED, _("Submitted")),
@@ -105,6 +106,7 @@ class EventType:
         (EXECUTED, _("Executed")),
         (FAILED, _("Execution Failed")),
         (RETRIED, _("Retried")),
+        (REASSIGNED, _("Reassigned")),
     ]
 
 

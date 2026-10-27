@@ -38,6 +38,18 @@ TENANT_MODEL = settings.APPROVALS_TENANT_MODEL
 ROLE_MODEL = settings.APPROVALS_ROLE_MODEL
 
 
+def same_db(instance, related_manager):
+    """``related_manager`` (a relation of ``instance``) reading from the database ``instance`` was loaded from.
+
+    Decisions read back what they have just written (a filled slot, the next stage) inside the same transaction,
+    while a host's database router may send plain reads to a replica, which can't see uncommitted rows. Rows reached
+    through an instance therefore follow that instance: a request locked for a decision comes from the write
+    database, so its stages, slots and decisions are read from there too.
+    """
+    db = instance._state.db
+    return related_manager.db_manager(db) if db else related_manager
+
+
 class Tenant(models.Model):
     """The built-in tenant, for projects that don't have tenants of their own.
 
@@ -353,7 +365,7 @@ class ApprovalRequest(ConcurrentTransitionMixin, models.Model):
         """The stage checkers act on now, or None once the request is no longer pending."""
         if self.status != RequestStatus.PENDING:
             return None
-        return self.stages.filter(order=self.current_stage).first()
+        return same_db(self, self.stages).filter(order=self.current_stage).first()
 
 
 class ApprovalLock(models.Model):

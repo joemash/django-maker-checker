@@ -4,6 +4,8 @@ Every step in a request's life is an ``ApprovalEvent`` on its timeline (submitte
 rejected, cancelled, escalated, executed), which is the audit trail reviewers and auditors read.
 """
 
+from django.test import override_settings
+
 from django_maker_checker import services
 from django_maker_checker.constants import Decision, EventType, RequestStatus
 from django_maker_checker.exceptions import ApprovalError
@@ -37,6 +39,13 @@ class Cancelling(EngineTestCase):
         with self.assertRaisesMessage(ApprovalError, "cannot cancel"):
             services.cancel(self.req.pk, self.maker)
 
+    @override_settings(APPROVALS_COMMENT_MAX_LENGTH=20)
+    def test_a_reason_longer_than_the_limit_is_refused(self):
+        with self.assertRaisesMessage(ApprovalError, "at most 20 characters"):
+            services.cancel(self.req.pk, self.maker, "x" * 21)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, RequestStatus.PENDING)
+
     def test_cancelling_frees_the_item_for_a_new_request(self):
         services.cancel(self.req.pk, self.maker)
         self.assertTrue(self.publish().pending)
@@ -59,6 +68,11 @@ class Commenting(EngineTestCase):
             services.add_comment(self.req.pk, self.checker1, "   ")
         with self.assertRaises(ApprovalError):
             services.add_comment(self.req.pk, self.outsider, "hi")
+
+    @override_settings(APPROVALS_COMMENT_MAX_LENGTH=20)
+    def test_comments_longer_than_the_limit_are_refused(self):
+        with self.assertRaisesMessage(ApprovalError, "at most 20 characters"):
+            services.add_comment(self.req.pk, self.checker1, "x" * 21)
 
 
 class Viewing(EngineTestCase):
