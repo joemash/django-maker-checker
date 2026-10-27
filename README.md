@@ -24,9 +24,9 @@
 | django\_maker\_checker/policies.py                                    |      214 |        8 |     96% |88, 321-323, 331-332, 406-407 |
 | django\_maker\_checker/queries.py                                     |      179 |       15 |     92% |73, 94-95, 115, 130, 142, 170, 177, 228, 231, 237-238, 242, 347, 354 |
 | django\_maker\_checker/registry.py                                    |       87 |        7 |     92% |75, 99, 110, 131, 137, 182, 192 |
-| django\_maker\_checker/services.py                                    |      550 |       15 |     97% |100-102, 228, 299, 314, 414, 443-444, 544, 742, 791, 816, 913, 916 |
+| django\_maker\_checker/services.py                                    |      553 |       16 |     97% |100-102, 228, 299, 314, 414, 443-444, 544, 742, 791, 809, 820, 917, 920 |
 | django\_maker\_checker/tasks.py                                       |       10 |        1 |     90% |        21 |
-| **TOTAL**                                                             | **1911** |  **124** | **94%** |           |
+| **TOTAL**                                                             | **1914** |  **125** | **93%** |           |
 
 
 ## Setup coverage badge
