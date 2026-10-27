@@ -46,6 +46,14 @@ class ReassigningALeaver(EngineTestCase):
         self.leave(self.checker1)
         self.assertEqual(services.decide(req.pk, self.admin, Decision.APPROVE).status, RequestStatus.EXECUTED)
 
+    def test_a_backup_kept_by_a_rule_whose_sla_is_off_does_not_take_over(self):
+        # Switching a rule's SLA off keeps its last backup (so switching it back on restores it), but the backup
+        # only counts while the SLA is on, as the rule's history shows.
+        self.policy(PUBLISH, [self.checker1], sla_enabled=False, escalation_user=self.admin)
+        req = self.raise_request()
+        self.assertEqual(self.leave(self.checker1), {"reassigned": 0, "unassigned": 1})
+        self.assertEqual(req.active_stage.approvers.get().approver_user, self.checker1)
+
     def test_with_nobody_to_take_over_the_slot_stays_and_the_timeline_says_so(self):
         self.policy(PUBLISH, [self.checker1])
         req = self.raise_request()
